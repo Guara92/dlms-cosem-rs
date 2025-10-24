@@ -15,6 +15,8 @@ homepage = "https://github.com/reitermarkus/dlms-cosem-rs"
 aes = "0.8"
 aes-gcm = "0.10"
 cipher = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+jiff = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
 derive-try-from-primitive = "1"
 mbusparse = { version = "0.1", default-features = false, optional = true }
 hdlcparse = { version = "2", default-features = false, optional = true }
@@ -23,5 +25,7 @@ serde = { version = "1", default-features = false, features = ["derive"], option
 
 [features]
 default = ["std", "mbusparse", "hdlcparse"]
-std = ["serde?/std", "nom/std"]
+std = ["serde?/std", "nom/std", "chrono?/std", "jiff?/std"]
 encode = []  # Enable encoding/serialization functionality (building DLMS messages)
+chrono-conversions = ["chrono"]  # Enable chrono interoperability (from_chrono methods work in no_std, now() requires std)
+jiff-conversions = ["jiff"]  # Enable jiff interoperability (from_jiff methods work in no_std, now_jiff() requires std)

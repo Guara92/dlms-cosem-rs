@@ -4,6 +4,9 @@ use nom::{IResult, Parser, number::complete::u8};
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 
+#[cfg(feature = "encode")]
+extern crate alloc;
+
 /// An OBIS code.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObisCode {
@@ -23,6 +26,55 @@ impl ObisCode {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, (a, b, c, d, e, f)) = (u8, u8, u8, u8, u8, u8).parse(input)?;
         Ok((input, Self::new(a, b, c, d, e, f)))
+    }
+
+    /// Encode OBIS code as 6 raw bytes (A-B-C-D-E-F)
+    ///
+    /// Returns a fixed-size array of 6 bytes representing the OBIS code.
+    /// This is the raw binary format without any A-XDR type tags.
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::ObisCode;
+    ///
+    /// let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+    /// let encoded = code.encode();
+    /// assert_eq!(encoded, [1, 0, 1, 8, 0, 255]);
+    /// ```
+    #[cfg(feature = "encode")]
+    pub fn encode(&self) -> [u8; 6] {
+        [self.a, self.b, self.c, self.d, self.e, self.f]
+    }
+
+    /// Encode OBIS code with A-XDR type tag: 09 06 A B C D E F
+    ///
+    /// Returns a Vec containing:
+    /// - Tag 09 = octet-string (per DLMS Green Book Section 4.1.6.1)
+    /// - Length 06 = 6 bytes
+    /// - 6 bytes of the OBIS code (A-B-C-D-E-F)
+    ///
+    /// Total length: 8 bytes (tag + length + 6 data bytes)
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::ObisCode;
+    ///
+    /// let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+    /// let encoded = code.encode_with_type();
+    /// assert_eq!(encoded, vec![0x09, 0x06, 1, 0, 1, 8, 0, 255]);
+    /// ```
+    #[cfg(feature = "encode")]
+    pub fn encode_with_type(&self) -> alloc::vec::Vec<u8> {
+        let mut buf = alloc::vec::Vec::with_capacity(8);
+        buf.push(0x09); // octet-string tag
+        buf.push(0x06); // length = 6 bytes
+        buf.push(self.a);
+        buf.push(self.b);
+        buf.push(self.c);
+        buf.push(self.d);
+        buf.push(self.e);
+        buf.push(self.f);
+        buf
     }
 }
 
@@ -51,6 +103,225 @@ impl Serialize for ObisCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== ENCODING TESTS ====================
+    // Following TDD approach: write tests first (RED phase)
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_basic() {
+        // Test basic OBIS code encoding to 6 raw bytes
+        let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded = code.encode();
+
+        assert_eq!(encoded, [1, 0, 1, 8, 0, 255]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_all_zeros() {
+        let code = ObisCode::new(0, 0, 0, 0, 0, 0);
+        let encoded = code.encode();
+
+        assert_eq!(encoded, [0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_all_max() {
+        let code = ObisCode::new(255, 255, 255, 255, 255, 255);
+        let encoded = code.encode();
+
+        assert_eq!(encoded, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_with_type_basic() {
+        // Test A-XDR encoding: tag (0x09) + length (0x06) + 6 bytes
+        let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded = code.encode_with_type();
+
+        // Expected: 0x09 (octet-string tag), 0x06 (length=6), then 6 bytes
+        assert_eq!(encoded, vec![0x09, 0x06, 1, 0, 1, 8, 0, 255]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_with_type_all_zeros() {
+        let code = ObisCode::new(0, 0, 0, 0, 0, 0);
+        let encoded = code.encode_with_type();
+
+        assert_eq!(encoded, vec![0x09, 0x06, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_with_type_all_max() {
+        let code = ObisCode::new(255, 255, 255, 255, 255, 255);
+        let encoded = code.encode_with_type();
+
+        assert_eq!(encoded, vec![0x09, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_roundtrip_basic() {
+        // Test encode → parse roundtrip
+        let original = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded = original.encode();
+        let (remaining, parsed) = ObisCode::parse(&encoded).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_roundtrip_all_zeros() {
+        let original = ObisCode::new(0, 0, 0, 0, 0, 0);
+        let encoded = original.encode();
+        let (_, parsed) = ObisCode::parse(&encoded).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_roundtrip_all_max() {
+        let original = ObisCode::new(255, 255, 255, 255, 255, 255);
+        let encoded = original.encode();
+        let (_, parsed) = ObisCode::parse(&encoded).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_roundtrip_real_world_codes() {
+        // Test real OBIS codes
+
+        // Active energy total import (1-0:1.8.0*255)
+        let code1 = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded1 = code1.encode();
+        let (_, parsed1) = ObisCode::parse(&encoded1).unwrap();
+        assert_eq!(parsed1, code1);
+
+        // Active power total (1-0:1.7.0*255)
+        let code2 = ObisCode::new(1, 0, 1, 7, 0, 255);
+        let encoded2 = code2.encode();
+        let (_, parsed2) = ObisCode::parse(&encoded2).unwrap();
+        assert_eq!(parsed2, code2);
+
+        // Clock (0-0:1.0.0*255)
+        let code3 = ObisCode::new(0, 0, 1, 0, 0, 255);
+        let encoded3 = code3.encode();
+        let (_, parsed3) = ObisCode::parse(&encoded3).unwrap();
+        assert_eq!(parsed3, code3);
+
+        // Voltage L1 (1-0:32.7.0*255)
+        let code4 = ObisCode::new(1, 0, 32, 7, 0, 255);
+        let encoded4 = code4.encode();
+        let (_, parsed4) = ObisCode::parse(&encoded4).unwrap();
+        assert_eq!(parsed4, code4);
+
+        // Current L1 (1-0:31.7.0*255)
+        let code5 = ObisCode::new(1, 0, 31, 7, 0, 255);
+        let encoded5 = code5.encode();
+        let (_, parsed5) = ObisCode::parse(&encoded5).unwrap();
+        assert_eq!(parsed5, code5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_with_type_roundtrip() {
+        // Test encode_with_type → parse roundtrip
+        // Note: parse expects raw 6 bytes, so we skip the A-XDR header
+        let original = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded = original.encode_with_type();
+
+        // Skip tag (0x09) and length (0x06), parse the 6 bytes
+        let (_, parsed) = ObisCode::parse(&encoded[2..]).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_with_type_header() {
+        // Verify the A-XDR header is always correct
+        let codes = vec![
+            ObisCode::new(1, 0, 1, 8, 0, 255),
+            ObisCode::new(0, 0, 0, 0, 0, 0),
+            ObisCode::new(255, 255, 255, 255, 255, 255),
+            ObisCode::new(1, 0, 32, 7, 0, 255),
+        ];
+
+        for code in codes {
+            let encoded = code.encode_with_type();
+
+            // All encodings should start with 0x09 0x06
+            assert_eq!(encoded[0], 0x09, "Tag should be 0x09 (octet-string)");
+            assert_eq!(encoded[1], 0x06, "Length should be 0x06 (6 bytes)");
+            assert_eq!(encoded.len(), 8, "Total length should be 8 bytes");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_matches_parse_format() {
+        // Verify that encoded output matches what parse() expects
+        let code = ObisCode::new(10, 20, 30, 40, 50, 60);
+        let encoded = code.encode();
+
+        // Create test input that parse() expects
+        let expected = [10, 20, 30, 40, 50, 60];
+
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_green_book_compliance_get_request_example() {
+        // Verify compliance with DLMS Green Book Ed. 12, Line 1458
+        // GET-Request example: C0 01 00 03 01 01 01 08 00 FF 02
+        // Where: 01 01 01 08 00 FF is the OBIS code for Register (1-0:1.8.0*255)
+
+        let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded = code.encode();
+
+        // OBIS code in GET-Request is encoded as raw 6 bytes (no A-XDR tag)
+        assert_eq!(encoded, [0x01, 0x00, 0x01, 0x08, 0x00, 0xFF]);
+        assert_eq!(encoded.len(), 6);
+
+        // Verify it matches the Green Book example exactly
+        let green_book_obis_bytes = [0x01, 0x00, 0x01, 0x08, 0x00, 0xFF];
+        assert_eq!(encoded, green_book_obis_bytes);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_green_book_compliance_data_octet_string() {
+        // When OBIS code is used as Data::OctetString (e.g., in structures),
+        // it must be encoded with A-XDR tag: 0x09 (octet-string) + 0x06 (length)
+
+        let code = ObisCode::new(1, 0, 1, 8, 0, 255);
+        let encoded_with_type = code.encode_with_type();
+
+        // First byte: 0x09 = octet-string tag (per DataType enum)
+        assert_eq!(encoded_with_type[0], 0x09);
+
+        // Second byte: 0x06 = length (6 bytes for OBIS code)
+        assert_eq!(encoded_with_type[1], 0x06);
+
+        // Remaining 6 bytes: OBIS code
+        assert_eq!(&encoded_with_type[2..8], &[0x01, 0x00, 0x01, 0x08, 0x00, 0xFF]);
+
+        // Total length: 8 bytes (tag + length + 6 data bytes)
+        assert_eq!(encoded_with_type.len(), 8);
+    }
+
+    // ==================== PARSING TESTS ====================
 
     #[test]
     fn test_parse_basic() {

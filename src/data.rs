@@ -1,6 +1,6 @@
 #[cfg(feature = "serde")]
 use alloc::string::ToString;
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 use core::convert::TryFrom;
 use core::fmt;
 
@@ -12,6 +12,12 @@ use nom::{
 };
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
+
+#[cfg(feature = "chrono-conversions")]
+use chrono::{Datelike, Timelike};
+
+#[cfg(feature = "jiff-conversions")]
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -98,6 +104,66 @@ impl Date {
         buffer
     }
 
+    #[cfg(feature = "chrono-conversions")]
+    /// Create a Date from a chrono NaiveDate
+    ///
+    /// The day_of_week is automatically calculated from the date.
+    /// Both chrono and DLMS use ISO 8601 weekday numbering (Monday=1, Sunday=7).
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `chrono-conversions` feature is enabled.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "chrono-conversions")]
+    /// # {
+    /// use dlms_cosem::Date;
+    /// use chrono::NaiveDate;
+    ///
+    /// let naive_date = NaiveDate::from_ymd_opt(2024, 12, 25).unwrap();
+    /// let date = Date::from_chrono(&naive_date);
+    /// // Date is created with the correct values from chrono
+    /// # }
+    /// ```
+    pub fn from_chrono(date: &chrono::NaiveDate) -> Self {
+        Self {
+            year: date.year() as u16,
+            month: date.month() as u8,
+            day_of_month: date.day() as u8,
+            day_of_week: date.weekday().number_from_monday() as u8,
+        }
+    }
+
+    #[cfg(feature = "jiff-conversions")]
+    /// Create a Date from a jiff civil::Date
+    ///
+    /// The day_of_week is automatically calculated from the date.
+    /// Both jiff and DLMS use ISO 8601 weekday numbering (Monday=1, Sunday=7).
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `jiff-conversions` feature is enabled.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "jiff-conversions")]
+    /// # {
+    /// use dlms_cosem::Date;
+    /// use jiff::civil::Date as JiffDate;
+    ///
+    /// let jiff_date = JiffDate::new(2024, 12, 25).unwrap();
+    /// let date = Date::from_jiff(&jiff_date);
+    /// // Date is created with the correct values from jiff
+    /// # }
+    /// ```
+    pub fn from_jiff(date: &jiff::civil::Date) -> Self {
+        Self {
+            year: date.year() as u16,
+            month: date.month() as u8,
+            day_of_month: date.day() as u8,
+            day_of_week: date.weekday().to_monday_one_offset() as u8,
+        }
+    }
+
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, year) = be_u16(input)?;
         let (input, month) = u8(input)?;
@@ -150,6 +216,66 @@ impl Time {
             self.second.unwrap_or(0xFF),
             self.hundredth.unwrap_or(0xFF),
         ]
+    }
+
+    #[cfg(feature = "chrono-conversions")]
+    /// Create a Time from a chrono NaiveTime
+    ///
+    /// Milliseconds are converted to hundredths of a second (truncated).
+    /// All fields are set to Some values (no wildcards).
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `chrono-conversions` feature is enabled.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "chrono-conversions")]
+    /// # {
+    /// use dlms_cosem::Time;
+    /// use chrono::NaiveTime;
+    ///
+    /// let naive_time = NaiveTime::from_hms_milli_opt(14, 30, 45, 500).unwrap();
+    /// let time = Time::from_chrono(&naive_time);
+    /// // Time is created with hour=14, minute=30, second=45, hundredth=50 (500ms)
+    /// # }
+    /// ```
+    pub fn from_chrono(time: &chrono::NaiveTime) -> Self {
+        Self {
+            hour: Some(time.hour() as u8),
+            minute: Some(time.minute() as u8),
+            second: Some(time.second() as u8),
+            hundredth: Some((time.nanosecond() / 10_000_000) as u8), // ns to hundredths
+        }
+    }
+
+    #[cfg(feature = "jiff-conversions")]
+    /// Create a Time from a jiff civil::Time
+    ///
+    /// Nanoseconds are converted to hundredths of a second (truncated).
+    /// All fields are set to Some values (no wildcards).
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `jiff-conversions` feature is enabled.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "jiff-conversions")]
+    /// # {
+    /// use dlms_cosem::Time;
+    /// use jiff::civil::Time as JiffTime;
+    ///
+    /// let jiff_time = JiffTime::new(14, 30, 45, 500_000_000).unwrap();
+    /// let time = Time::from_jiff(&jiff_time);
+    /// // Time is created with hour=14, minute=30, second=45, hundredth=50 (500ms)
+    /// # }
+    /// ```
+    pub fn from_jiff(time: &jiff::civil::Time) -> Self {
+        Self {
+            hour: Some(time.hour() as u8),
+            minute: Some(time.minute() as u8),
+            second: Some(time.second() as u8),
+            hundredth: Some((time.subsec_nanosecond() / 10_000_000) as u8), // ns to hundredths
+        }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
@@ -267,6 +393,129 @@ impl DateTime {
         buffer.push_i16(self.offset_minutes.unwrap_or(-0x8000));
         buffer.push_u8(self.clock_status.as_ref().map(|cs| cs.0).unwrap_or(0xFF));
         buffer
+    }
+
+    #[cfg(feature = "chrono-conversions")]
+    /// Create a DateTime from a chrono NaiveDateTime with timezone offset and clock status
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `chrono-conversions` feature is enabled.
+    ///
+    /// # Arguments
+    /// * `dt` - The NaiveDateTime to convert
+    /// * `offset_minutes` - Timezone offset in minutes from UTC (positive = ahead of UTC)
+    /// * `clock_status` - Clock status byte (see ClockStatus for bit definitions)
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "chrono-conversions")]
+    /// # {
+    /// use dlms_cosem::DateTime;
+    /// use chrono::NaiveDateTime;
+    ///
+    /// let naive_dt = NaiveDateTime::parse_from_str(
+    ///     "2024-06-15 14:30:45",
+    ///     "%Y-%m-%d %H:%M:%S"
+    /// ).unwrap();
+    /// let datetime = DateTime::from_chrono(&naive_dt, 120, 0x00); // UTC+2
+    /// # }
+    /// ```
+    pub fn from_chrono(dt: &chrono::NaiveDateTime, offset_minutes: i16, clock_status: u8) -> Self {
+        Self {
+            date: Date::from_chrono(&dt.date()),
+            time: Time::from_chrono(&dt.time()),
+            offset_minutes: Some(offset_minutes),
+            clock_status: Some(ClockStatus(clock_status)),
+        }
+    }
+
+    #[cfg(all(feature = "std", feature = "chrono-conversions"))]
+    /// Create a DateTime representing the current local time
+    ///
+    /// This uses the system clock to get the current time and timezone offset.
+    /// The clock_status is set to 0x00 (no special status).
+    ///
+    /// **Note**: This method requires both `std` and `chrono-conversions` features
+    /// because it uses `chrono::Local` which depends on the system clock.
+    /// The `from_chrono()` methods work in `no_std` environments.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(all(feature = "std", feature = "chrono-conversions"))]
+    /// # {
+    /// use dlms_cosem::DateTime;
+    ///
+    /// let now = DateTime::now();
+    /// // Use the current DateTime in your application
+    /// # }
+    /// ```
+    pub fn now() -> Self {
+        use chrono::Local;
+        let local_time = Local::now();
+        let naive = local_time.naive_local();
+        let offset_seconds = local_time.offset().local_minus_utc();
+        let offset_minutes = (offset_seconds / 60) as i16;
+
+        Self::from_chrono(&naive, offset_minutes, 0x00)
+    }
+
+    #[cfg(feature = "jiff-conversions")]
+    /// Create a DateTime from a jiff civil::DateTime with timezone offset and clock status
+    ///
+    /// This method works in both `std` and `no_std` environments when the
+    /// `jiff-conversions` feature is enabled.
+    ///
+    /// # Arguments
+    /// * `dt` - The jiff civil::DateTime to convert
+    /// * `offset_minutes` - Timezone offset in minutes from UTC (positive = ahead of UTC)
+    /// * `clock_status` - Clock status byte (see ClockStatus for bit definitions)
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "jiff-conversions")]
+    /// # {
+    /// use dlms_cosem::DateTime;
+    /// use jiff::civil::DateTime as JiffDateTime;
+    ///
+    /// let jiff_dt = JiffDateTime::new(2024, 6, 15, 14, 30, 45, 0).unwrap();
+    /// let datetime = DateTime::from_jiff(&jiff_dt, 120, 0x00); // UTC+2
+    /// # }
+    /// ```
+    pub fn from_jiff(dt: &jiff::civil::DateTime, offset_minutes: i16, clock_status: u8) -> Self {
+        Self {
+            date: Date::from_jiff(&dt.date()),
+            time: Time::from_jiff(&dt.time()),
+            offset_minutes: Some(offset_minutes),
+            clock_status: Some(ClockStatus(clock_status)),
+        }
+    }
+
+    #[cfg(all(feature = "std", feature = "jiff-conversions"))]
+    /// Create a DateTime representing the current local time using jiff
+    ///
+    /// This uses the system clock to get the current time and timezone offset.
+    /// The clock_status is set to 0x00 (no special status).
+    ///
+    /// **Note**: This method requires both `std` and `jiff-conversions` features
+    /// because it uses `jiff::Zoned` which depends on the system clock.
+    /// The `from_jiff()` methods work in `no_std` environments.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(all(feature = "std", feature = "jiff-conversions"))]
+    /// # {
+    /// use dlms_cosem::DateTime;
+    ///
+    /// let now = DateTime::now_jiff();
+    /// // Use the current DateTime in your application
+    /// # }
+    /// ```
+    pub fn now_jiff() -> Self {
+        let zoned = jiff::Zoned::now();
+        let offset_seconds = zoned.offset().seconds();
+        let offset_minutes = (offset_seconds / 60) as i16;
+
+        Self::from_jiff(&zoned.datetime(), offset_minutes, 0x00)
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
@@ -1735,6 +1984,454 @@ mod tests {
 
         assert_eq!(remaining.len(), 0);
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_date_wildcard_year() {
+        // Test wildcard year (0xFFFF)
+        let date = Date { year: 0xFFFF, month: 0xFF, day_of_month: 0xFF, day_of_week: 0xFF };
+        let data = Data::Date(date);
+        let encoded = data.encode();
+
+        // Expected: [0x1A, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        assert_eq!(encoded, vec![0x1A, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+
+        // Round-trip test
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_datetime_with_wildcards() {
+        // Test DateTime with all wildcards (None values)
+        let date = Date { year: 0xFFFF, month: 0xFF, day_of_month: 0xFF, day_of_week: 0xFF };
+        let time = Time { hour: None, minute: None, second: None, hundredth: None };
+        let datetime = DateTime {
+            date,
+            time,
+            offset_minutes: None, // Wildcard = 0x8000
+            clock_status: None,   // Wildcard = 0xFF
+        };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+
+        // Expected: [0x19] + date(5xFF) + time(4xFF) + offset(0x8000) + status(0xFF)
+        assert_eq!(
+            encoded,
+            vec![0x19, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0x00, 0xFF]
+        );
+        assert_eq!(data.encoded_len(), 13);
+
+        // Round-trip test
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_datetime_timezone_extremes() {
+        // Test maximum positive timezone offset (+12 hours = +720 minutes)
+        let date = Date { year: 2024, month: 6, day_of_month: 15, day_of_week: 6 };
+        let time = Time { hour: Some(12), minute: Some(0), second: Some(0), hundredth: Some(0) };
+        let datetime_plus = DateTime {
+            date: date.clone(),
+            time: time.clone(),
+            offset_minutes: Some(720), // UTC+12
+            clock_status: Some(ClockStatus(0x00)),
+        };
+        let data_plus = Data::DateTime(datetime_plus);
+        let encoded_plus = data_plus.encode();
+
+        // 720 = 0x02D0
+        assert_eq!(
+            encoded_plus,
+            vec![0x19, 0x07, 0xE8, 0x06, 0x0F, 0x06, 0x0C, 0x00, 0x00, 0x00, 0x02, 0xD0, 0x00]
+        );
+
+        // Test maximum negative timezone offset (-12 hours = -720 minutes)
+        let datetime_minus = DateTime {
+            date,
+            time,
+            offset_minutes: Some(-720), // UTC-12
+            clock_status: Some(ClockStatus(0x00)),
+        };
+        let data_minus = Data::DateTime(datetime_minus);
+        let encoded_minus = data_minus.encode();
+
+        // -720 = 0xFD30 (two's complement)
+        assert_eq!(
+            encoded_minus,
+            vec![0x19, 0x07, 0xE8, 0x06, 0x0F, 0x06, 0x0C, 0x00, 0x00, 0x00, 0xFD, 0x30, 0x00]
+        );
+
+        // Round-trip tests
+        let (_, parsed_plus) = Data::parse(&encoded_plus).unwrap();
+        assert_eq!(parsed_plus, data_plus);
+
+        let (_, parsed_minus) = Data::parse(&encoded_minus).unwrap();
+        assert_eq!(parsed_minus, data_minus);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_datetime_clock_status_bits() {
+        // Test all ClockStatus bits
+        let date = Date { year: 2024, month: 1, day_of_month: 1, day_of_week: 1 };
+        let time = Time { hour: Some(0), minute: Some(0), second: Some(0), hundredth: Some(0) };
+
+        // Test invalid value bit (0x01)
+        let datetime = DateTime {
+            date: date.clone(),
+            time: time.clone(),
+            offset_minutes: Some(0),
+            clock_status: Some(ClockStatus(0x01)),
+        };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded[12], 0x01);
+
+        // Test doubtful value bit (0x02)
+        let datetime = DateTime {
+            date: date.clone(),
+            time: time.clone(),
+            offset_minutes: Some(0),
+            clock_status: Some(ClockStatus(0x02)),
+        };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded[12], 0x02);
+
+        // Test daylight saving bit (0x80)
+        let datetime = DateTime {
+            date: date.clone(),
+            time: time.clone(),
+            offset_minutes: Some(0),
+            clock_status: Some(ClockStatus(0x80)),
+        };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded[12], 0x80);
+
+        // Test multiple bits combined (0x83 = invalid + doubtful + daylight)
+        let datetime =
+            DateTime { date, time, offset_minutes: Some(0), clock_status: Some(ClockStatus(0x83)) };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded[12], 0x83);
+
+        // Verify round-trip
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_date_edge_values() {
+        // Test minimum valid date values
+        let date_min = Date { year: 0, month: 1, day_of_month: 1, day_of_week: 0 };
+        let data_min = Data::Date(date_min);
+        let encoded_min = data_min.encode();
+        assert_eq!(encoded_min, vec![0x1A, 0x00, 0x00, 0x01, 0x01, 0x00]);
+
+        // Test maximum valid date values
+        let date_max = Date { year: 0xFFFE, month: 12, day_of_month: 31, day_of_week: 7 };
+        let data_max = Data::Date(date_max);
+        let encoded_max = data_max.encode();
+        assert_eq!(encoded_max, vec![0x1A, 0xFF, 0xFE, 0x0C, 0x1F, 0x07]);
+
+        // Round-trip tests
+        let (_, parsed_min) = Data::parse(&encoded_min).unwrap();
+        assert_eq!(parsed_min, data_min);
+
+        let (_, parsed_max) = Data::parse(&encoded_max).unwrap();
+        assert_eq!(parsed_max, data_max);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_time_edge_values() {
+        // Test minimum valid time values
+        let time_min = Time { hour: Some(0), minute: Some(0), second: Some(0), hundredth: Some(0) };
+        let data_min = Data::Time(time_min);
+        let encoded_min = data_min.encode();
+        assert_eq!(encoded_min, vec![0x1B, 0x00, 0x00, 0x00, 0x00]);
+
+        // Test maximum valid time values
+        let time_max =
+            Time { hour: Some(23), minute: Some(59), second: Some(59), hundredth: Some(99) };
+        let data_max = Data::Time(time_max);
+        let encoded_max = data_max.encode();
+        assert_eq!(encoded_max, vec![0x1B, 0x17, 0x3B, 0x3B, 0x63]);
+
+        // Round-trip tests
+        let (_, parsed_min) = Data::parse(&encoded_min).unwrap();
+        assert_eq!(parsed_min, data_min);
+
+        let (_, parsed_max) = Data::parse(&encoded_max).unwrap();
+        assert_eq!(parsed_max, data_max);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "chrono-conversions"))]
+    fn test_date_from_chrono() {
+        use chrono::NaiveDate;
+
+        // Test typical date
+        let naive_date = NaiveDate::from_ymd_opt(2024, 12, 25).unwrap();
+        let date = Date::from_chrono(&naive_date);
+
+        assert_eq!(date.year, 2024);
+        assert_eq!(date.month, 12);
+        assert_eq!(date.day_of_month, 25);
+        // chrono's weekday: Mon=1, ..., Sun=7 (ISO 8601)
+        // DLMS weekday: Mon=1, ..., Sun=7 (same)
+        assert_eq!(date.day_of_week, 3); // Wednesday (2024-12-25)
+
+        // Test encoding round-trip
+        let data = Data::Date(date);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "chrono-conversions"))]
+    fn test_time_from_chrono() {
+        use chrono::NaiveTime;
+
+        // Test typical time
+        let naive_time = NaiveTime::from_hms_milli_opt(14, 30, 45, 500).unwrap();
+        let time = Time::from_chrono(&naive_time);
+
+        assert_eq!(time.hour, Some(14));
+        assert_eq!(time.minute, Some(30));
+        assert_eq!(time.second, Some(45));
+        assert_eq!(time.hundredth, Some(50)); // 500ms = 50 hundredths
+
+        // Test encoding round-trip
+        let data = Data::Time(time);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "chrono-conversions"))]
+    fn test_time_from_chrono_millisecond_rounding() {
+        use chrono::NaiveTime;
+
+        // Test millisecond rounding: 505ms -> 50 hundredths (truncated)
+        let naive_time = NaiveTime::from_hms_milli_opt(12, 0, 0, 505).unwrap();
+        let time = Time::from_chrono(&naive_time);
+        assert_eq!(time.hundredth, Some(50));
+
+        // Test 999ms -> 99 hundredths
+        let naive_time = NaiveTime::from_hms_milli_opt(12, 0, 0, 999).unwrap();
+        let time = Time::from_chrono(&naive_time);
+        assert_eq!(time.hundredth, Some(99));
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "chrono-conversions"))]
+    fn test_datetime_from_chrono() {
+        use chrono::NaiveDateTime;
+
+        let naive_dt =
+            NaiveDateTime::parse_from_str("2024-06-15 14:30:45.500", "%Y-%m-%d %H:%M:%S%.3f")
+                .unwrap();
+        let datetime = DateTime::from_chrono(&naive_dt, 120, 0x00); // UTC+2, no special status
+
+        assert_eq!(datetime.date.year, 2024);
+        assert_eq!(datetime.date.month, 6);
+        assert_eq!(datetime.date.day_of_month, 15);
+        assert_eq!(datetime.time.hour, Some(14));
+        assert_eq!(datetime.time.minute, Some(30));
+        assert_eq!(datetime.time.second, Some(45));
+        assert_eq!(datetime.time.hundredth, Some(50));
+        assert_eq!(datetime.offset_minutes, Some(120));
+        assert_eq!(datetime.clock_status, Some(ClockStatus(0x00)));
+
+        // Test encoding round-trip
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "chrono-conversions"))]
+    fn test_datetime_from_chrono_with_timezone() {
+        use chrono::NaiveDateTime;
+
+        // Test negative timezone offset (UTC-5)
+        let naive_dt =
+            NaiveDateTime::parse_from_str("2024-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let datetime = DateTime::from_chrono(&naive_dt, -300, 0x80); // UTC-5, daylight saving
+
+        assert_eq!(datetime.offset_minutes, Some(-300));
+        assert_eq!(datetime.clock_status, Some(ClockStatus(0x80)));
+
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "std", feature = "chrono-conversions"))]
+    fn test_datetime_now() {
+        // Test that now() creates a valid DateTime
+        let datetime = DateTime::now();
+
+        // Basic sanity checks
+        assert!(datetime.date.year >= 2024); // Assuming test runs in 2024 or later
+        assert!(datetime.date.month >= 1 && datetime.date.month <= 12);
+        assert!(datetime.date.day_of_month >= 1 && datetime.date.day_of_month <= 31);
+        assert!(datetime.time.hour.is_some());
+        assert!(datetime.time.minute.is_some());
+        assert!(datetime.time.second.is_some());
+
+        // Test that it encodes correctly
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded.len(), 13);
+        assert_eq!(encoded[0], 0x19); // DateTime type tag
+
+        // Test round-trip
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    // Jiff conversion tests
+    #[test]
+    #[cfg(all(feature = "encode", feature = "jiff-conversions"))]
+    fn test_date_from_jiff() {
+        use jiff::civil::Date as JiffDate;
+
+        // Test typical date
+        let jiff_date = JiffDate::new(2024, 12, 25).unwrap();
+        let date = Date::from_jiff(&jiff_date);
+
+        assert_eq!(date.year, 2024);
+        assert_eq!(date.month, 12);
+        assert_eq!(date.day_of_month, 25);
+        // jiff's weekday: Monday=1, ..., Sunday=7 (ISO 8601, same as DLMS)
+        assert_eq!(date.day_of_week, 3); // Wednesday (2024-12-25)
+
+        // Test encoding round-trip
+        let data = Data::Date(date);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "jiff-conversions"))]
+    fn test_time_from_jiff() {
+        use jiff::civil::Time as JiffTime;
+
+        // Test typical time
+        let jiff_time = JiffTime::new(14, 30, 45, 500_000_000).unwrap(); // 500ms in nanoseconds
+        let time = Time::from_jiff(&jiff_time);
+
+        assert_eq!(time.hour, Some(14));
+        assert_eq!(time.minute, Some(30));
+        assert_eq!(time.second, Some(45));
+        assert_eq!(time.hundredth, Some(50)); // 500ms = 50 hundredths
+
+        // Test encoding round-trip
+        let data = Data::Time(time);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "jiff-conversions"))]
+    fn test_time_from_jiff_nanosecond_rounding() {
+        use jiff::civil::Time as JiffTime;
+
+        // Test nanosecond rounding: 505ms -> 50 hundredths (truncated)
+        let jiff_time = JiffTime::new(12, 0, 0, 505_000_000).unwrap();
+        let time = Time::from_jiff(&jiff_time);
+        assert_eq!(time.hundredth, Some(50));
+
+        // Test 999ms -> 99 hundredths
+        let jiff_time = JiffTime::new(12, 0, 0, 999_000_000).unwrap();
+        let time = Time::from_jiff(&jiff_time);
+        assert_eq!(time.hundredth, Some(99));
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "jiff-conversions"))]
+    fn test_datetime_from_jiff() {
+        use jiff::civil::DateTime as JiffDateTime;
+
+        let jiff_dt = JiffDateTime::new(2024, 6, 15, 14, 30, 45, 500_000_000).unwrap();
+        let datetime = DateTime::from_jiff(&jiff_dt, 120, 0x00); // UTC+2, no special status
+
+        assert_eq!(datetime.date.year, 2024);
+        assert_eq!(datetime.date.month, 6);
+        assert_eq!(datetime.date.day_of_month, 15);
+        assert_eq!(datetime.time.hour, Some(14));
+        assert_eq!(datetime.time.minute, Some(30));
+        assert_eq!(datetime.time.second, Some(45));
+        assert_eq!(datetime.time.hundredth, Some(50));
+        assert_eq!(datetime.offset_minutes, Some(120));
+        assert_eq!(datetime.clock_status, Some(ClockStatus(0x00)));
+
+        // Test encoding round-trip
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "encode", feature = "jiff-conversions"))]
+    fn test_datetime_from_jiff_with_timezone() {
+        use jiff::civil::DateTime as JiffDateTime;
+
+        // Test negative timezone offset (UTC-5)
+        let jiff_dt = JiffDateTime::new(2024, 1, 1, 0, 0, 0, 0).unwrap();
+        let datetime = DateTime::from_jiff(&jiff_dt, -300, 0x80); // UTC-5, daylight saving
+
+        assert_eq!(datetime.offset_minutes, Some(-300));
+        assert_eq!(datetime.clock_status, Some(ClockStatus(0x80)));
+
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    #[cfg(all(feature = "std", feature = "jiff-conversions"))]
+    fn test_datetime_now_jiff() {
+        // Test that now_jiff() creates a valid DateTime
+        let datetime = DateTime::now_jiff();
+
+        // Basic sanity checks
+        assert!(datetime.date.year >= 2024); // Assuming test runs in 2024 or later
+        assert!(datetime.date.month >= 1 && datetime.date.month <= 12);
+        assert!(datetime.date.day_of_month >= 1 && datetime.date.day_of_month <= 31);
+        assert!(datetime.time.hour.is_some());
+        assert!(datetime.time.minute.is_some());
+        assert!(datetime.time.second.is_some());
+
+        // Test that it encodes correctly
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+        assert_eq!(encoded.len(), 13);
+        assert_eq!(encoded[0], 0x19); // DateTime type tag
+
+        // Test round-trip
+        let (_, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(parsed, data);
     }
 
     #[test]
