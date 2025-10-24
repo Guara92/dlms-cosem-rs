@@ -340,7 +340,7 @@ impl ObisMap {
         while !remaining.is_empty() {
             match Register::parse(remaining) {
                 Ok((rest, reg)) => {
-                    values.insert(reg.obis_code.clone(), reg);
+                    values.insert(reg.obis_code, reg);
                     remaining = rest;
                 }
                 Err(nom::Err::Error(_)) => break,
