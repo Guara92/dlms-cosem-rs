@@ -28,7 +28,7 @@ This is a `no_std` library for parsing and encoding DLMS/COSEM messages from sma
 
 This library currently implements a subset of the DLMS/COSEM specification** (Green Book Ed. 12), focusing on core serialization functionality:
 
-### ✅ Implemented (Milestone 1: Basic Serialization - Complete)
+### ✅ Implemented
 
 - **Data Type Encoding/Parsing**
   - All 18 DLMS data types (Null, Integer, Unsigned, Long, LongUnsigned, DoubleLong, DoubleLongUnsigned, Long64, Long64Unsigned, Enum, Float32, Float64, OctetString, Utf8String, Date, Time, DateTime, Structure)
