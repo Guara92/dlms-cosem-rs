@@ -88,8 +88,8 @@ pub enum Unit {
 }
 
 impl Unit {
-  #[rustfmt::skip]
-  pub fn as_str(&self) -> Option<&'static str> {
+    #[rustfmt::skip]
+    pub fn as_str(&self) -> Option<&'static str> {
     Some(match self {
       Self::Year                       => "a",
       Self::Month                      => "mo",
@@ -165,22 +165,18 @@ impl Unit {
 }
 
 impl fmt::Display for Unit {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    if let Some(s) = self.as_str() {
-      s.fmt(f)
-    } else {
-      Ok(())
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(s) = self.as_str() { s.fmt(f) } else { Ok(()) }
     }
-  }
 }
 
 #[cfg(feature = "serde")]
 impl Serialize for Unit {
-  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-    if let Some(s) = self.as_str() {
-      serializer.serialize_str(s)
-    } else {
-      serializer.serialize_none()
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(s) = self.as_str() {
+            serializer.serialize_str(s)
+        } else {
+            serializer.serialize_none()
+        }
     }
-  }
 }

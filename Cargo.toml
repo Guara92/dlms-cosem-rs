@@ -1,7 +1,8 @@
 [package]
 name = "dlms_cosem"
 version = "0.2.0"
-edition = "2018"
+edition = "2024"
+rust-version = "1.85.1"
 authors = ["Markus Reiter <me@reitermark.us>"]
 license = "MIT OR Apache-2.0"
 readme = "ReadMe.md"
