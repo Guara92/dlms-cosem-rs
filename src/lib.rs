@@ -35,7 +35,7 @@ pub use obis_code::ObisCode;
 mod security_control;
 pub use security_control::SecurityControl;
 mod unit;
-pub use unit::Unit;
+pub use unit::{ScalerUnit, Unit};
 #[cfg(feature = "hdlcparse")]
 pub mod hdlc;
 #[cfg(feature = "mbusparse")]

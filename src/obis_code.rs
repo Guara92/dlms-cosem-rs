@@ -65,16 +65,7 @@ impl ObisCode {
     /// ```
     #[cfg(feature = "encode")]
     pub fn encode_with_type(&self) -> alloc::vec::Vec<u8> {
-        let mut buf = alloc::vec::Vec::with_capacity(8);
-        buf.push(0x09); // octet-string tag
-        buf.push(0x06); // length = 6 bytes
-        buf.push(self.a);
-        buf.push(self.b);
-        buf.push(self.c);
-        buf.push(self.d);
-        buf.push(self.e);
-        buf.push(self.f);
-        buf
+        alloc::vec![0x09, 0x06, self.a, self.b, self.c, self.d, self.e, self.f]
     }
 }
 

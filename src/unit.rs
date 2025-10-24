@@ -4,6 +4,11 @@ use derive_try_from_primitive::TryFromPrimitive;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 
+#[cfg(feature = "encode")]
+use alloc::vec::Vec;
+
+use crate::data::Data;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u8)]
 #[non_exhaustive]
@@ -88,6 +93,19 @@ pub enum Unit {
 }
 
 impl Unit {
+    #[cfg(feature = "encode")]
+    /// Encode unit as single byte enum value (0-255)
+    /// Reference: Green Book Ed. 12, Section 4.1.6.1 - enum encoding
+    pub fn encode(&self) -> u8 {
+        *self as u8
+    }
+
+    #[cfg(feature = "encode")]
+    /// Convert unit to i8 for scaler-unit structure encoding
+    /// Values 0-127 remain positive, 128-255 become negative (-128 to -1)
+    pub fn as_i8(&self) -> i8 {
+        *self as u8 as i8
+    }
     #[rustfmt::skip]
     pub fn as_str(&self) -> Option<&'static str> {
     Some(match self {
@@ -177,6 +195,69 @@ impl Serialize for Unit {
             serializer.serialize_str(s)
         } else {
             serializer.serialize_none()
+        }
+    }
+}
+
+/// ScalerUnit type - common COSEM attribute for registers
+/// Encoded as: Structure(2) with Integer (scaler) and Enum (unit)
+/// Example: scaler=-2, unit=30 (Wh) → 02 02 0F FE 16 1E
+/// Reference: Green Book Ed. 12, Section 4.1.3.8 (scal_unit_type)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalerUnit {
+    /// Power of 10 multiplier: actual_value = raw_value * 10^scaler
+    /// Example: scaler=-2 means divide by 100 (e.g., 12345 → 123.45)
+    pub scaler: i8,
+    /// DLMS unit enum (1-255)
+    pub unit: Unit,
+}
+
+impl ScalerUnit {
+    #[cfg(feature = "encode")]
+    /// Encode as A-XDR Structure(2): [Integer(scaler), Enum(unit)]
+    /// Reference: Green Book Ed. 12, Section 4.1.3.8
+    pub fn encode(&self) -> Vec<u8> {
+        let structure = Data::Structure(alloc::vec![
+            Data::Integer(self.scaler),
+            Data::Enum(self.unit.encode()),
+        ]);
+        structure.encode()
+    }
+
+    /// Parse ScalerUnit from A-XDR Structure(2)
+    /// Expected format: Structure with 2 elements [Integer, Enum]
+    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (input, data) = Data::parse(input)?;
+
+        match data {
+            Data::Structure(elements) if elements.len() == 2 => {
+                let scaler = match &elements[0] {
+                    Data::Integer(s) => *s,
+                    _ => {
+                        return Err(nom::Err::Error(nom::error::Error::new(
+                            input,
+                            nom::error::ErrorKind::Tag,
+                        )));
+                    }
+                };
+
+                let unit_value = match &elements[1] {
+                    Data::Enum(u) => *u,
+                    _ => {
+                        return Err(nom::Err::Error(nom::error::Error::new(
+                            input,
+                            nom::error::ErrorKind::Tag,
+                        )));
+                    }
+                };
+
+                let unit = Unit::try_from(unit_value).map_err(|_| {
+                    nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Verify))
+                })?;
+
+                Ok((input, ScalerUnit { scaler, unit }))
+            }
+            _ => Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
         }
     }
 }
@@ -495,5 +576,395 @@ mod tests {
             assert_eq!(unit.as_str(), Some(expected_str));
             assert_eq!(format!("{}", unit), expected_str);
         }
+    }
+
+    // ========================================================================
+    // Phase 1.4: Unit and Scaler Encoding Tests (TDD Approach)
+    // ========================================================================
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_unit_encode_common_units() {
+        // Green Book: Common units used in energy meters
+        assert_eq!(Unit::Year.encode(), 1);
+        assert_eq!(Unit::Hour.encode(), 5);
+        assert_eq!(Unit::Second.encode(), 7);
+        assert_eq!(Unit::Watt.encode(), 27);
+        assert_eq!(Unit::WattHour.encode(), 30);
+        assert_eq!(Unit::Ampere.encode(), 33);
+        assert_eq!(Unit::Volt.encode(), 35);
+        assert_eq!(Unit::Hertz.encode(), 44);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_unit_encode_edge_values() {
+        // Test boundary values
+        assert_eq!(Unit::Year.encode(), 1); // First valid unit
+        assert_eq!(Unit::Count.encode(), 255); // Last unit value
+        assert_eq!(Unit::Other.encode(), 254); // Second-to-last
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_unit_encode_all_defined_units() {
+        // Comprehensive test: ensure all defined units have correct values
+        let units = [
+            (Unit::Year, 1),
+            (Unit::Month, 2),
+            (Unit::Week, 3),
+            (Unit::Day, 4),
+            (Unit::Hour, 5),
+            (Unit::Minute, 6),
+            (Unit::Second, 7),
+            (Unit::Degree, 8),
+            (Unit::DegreeCelsius, 9),
+            (Unit::Currency, 10),
+            (Unit::Meter, 11),
+            (Unit::MeterPerSecond, 12),
+            (Unit::CubicMeter, 13),
+            (Unit::CubicMeterCorrected, 14),
+            (Unit::CubicMeterPerHour, 15),
+            (Unit::CubicMeterPerHourCorrected, 16),
+            (Unit::CubicMeterPerDay, 17),
+            (Unit::CubicMeterPerDayCorrected, 18),
+            (Unit::Liter, 19),
+            (Unit::Kilogramm, 20),
+            (Unit::Newton, 21),
+            (Unit::Newtonmeter, 22),
+            (Unit::Pascal, 23),
+            (Unit::Bar, 24),
+            (Unit::Joule, 25),
+            (Unit::JoulePerHour, 26),
+            (Unit::Watt, 27),
+            (Unit::VoltAmpere, 28),
+            (Unit::Var, 29),
+            (Unit::WattHour, 30),
+            (Unit::VoltAmpereHour, 31),
+            (Unit::VarHour, 32),
+            (Unit::Ampere, 33),
+            (Unit::Coulomb, 34),
+            (Unit::Volt, 35),
+            (Unit::VoltPerMeter, 36),
+            (Unit::Farad, 37),
+            (Unit::Ohm, 38),
+            (Unit::OhmMeter, 39),
+            (Unit::Weber, 40),
+            (Unit::Tesla, 41),
+            (Unit::AmperePerMeter, 42),
+            (Unit::Henry, 43),
+            (Unit::Hertz, 44),
+            (Unit::InverseWattHour, 45),
+            (Unit::InverseVarHour, 46),
+            (Unit::InverseVoltAmpereHour, 47),
+            (Unit::VoltSquaredHour, 48),
+            (Unit::AmpereSquaredHour, 49),
+            (Unit::KilogrammPerSecond, 50),
+            (Unit::Siemens, 51),
+            (Unit::Kelvin, 52),
+            (Unit::InverseVoltSquaredHour, 53),
+            (Unit::InverseAmpereSquaredHour, 54),
+            (Unit::InverseCubicMeter, 55),
+            (Unit::Percent, 56),
+            (Unit::AmpereHour, 57),
+            (Unit::WattHourPerCubicMeter, 60),
+            (Unit::JoulePerCubicMeter, 61),
+            (Unit::MolePercent, 62),
+            (Unit::GrammPerCubicMeter, 63),
+            (Unit::PascalSecond, 64),
+            (Unit::JoulePerKilogramm, 65),
+            (Unit::GramPerSquareCentimeter, 66),
+            (Unit::Atmosphere, 67),
+            (Unit::DezibelMilliwatt, 70),
+            (Unit::DezibelMicrovolt, 71),
+            (Unit::Dezibel, 72),
+            (Unit::Other, 254),
+            (Unit::Count, 255),
+        ];
+
+        for (unit, expected) in units {
+            assert_eq!(unit.encode(), expected, "Unit {:?} should encode to {}", unit, expected);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_unit_as_i8_positive_range() {
+        // Values 1-127 remain positive
+        assert_eq!(Unit::Year.as_i8(), 1);
+        assert_eq!(Unit::WattHour.as_i8(), 30);
+        assert_eq!(Unit::Ampere.as_i8(), 33);
+        assert_eq!(Unit::Hertz.as_i8(), 44);
+        assert_eq!(Unit::AmpereHour.as_i8(), 57);
+        assert_eq!(Unit::Dezibel.as_i8(), 72);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_unit_as_i8_negative_range() {
+        // Values 128-255 become negative i8 (-128 to -1)
+        assert_eq!(Unit::Other.as_i8(), -2); // 254 as i8 = -2
+        assert_eq!(Unit::Count.as_i8(), -1); // 255 as i8 = -1
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_encode_basic() {
+        // Green Book example: scaler=-2, unit=30 (Wh)
+        // Expected: 02 02 0F FE 16 1E
+        let su = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let encoded = su.encode();
+
+        assert_eq!(encoded[0], 0x02); // Structure tag
+        assert_eq!(encoded[1], 0x02); // 2 elements
+        assert_eq!(encoded[2], 0x0F); // Integer tag
+        assert_eq!(encoded[3], 0xFE); // -2 as i8
+        assert_eq!(encoded[4], 0x16); // Enum tag
+        assert_eq!(encoded[5], 0x1E); // 30 (WattHour)
+        assert_eq!(encoded.len(), 6);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_encode_positive_scaler() {
+        // Positive scaler: scaler=3, unit=33 (Ampere)
+        let su = ScalerUnit { scaler: 3, unit: Unit::Ampere };
+        let encoded = su.encode();
+
+        assert_eq!(encoded[0], 0x02); // Structure tag
+        assert_eq!(encoded[1], 0x02); // 2 elements
+        assert_eq!(encoded[2], 0x0F); // Integer tag
+        assert_eq!(encoded[3], 0x03); // 3 as i8
+        assert_eq!(encoded[4], 0x16); // Enum tag
+        assert_eq!(encoded[5], 0x21); // 33 (Ampere)
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_encode_zero_scaler() {
+        // Zero scaler: scaler=0, unit=11 (Meter)
+        let su = ScalerUnit { scaler: 0, unit: Unit::Meter };
+        let encoded = su.encode();
+
+        assert_eq!(encoded[0], 0x02); // Structure tag
+        assert_eq!(encoded[1], 0x02); // 2 elements
+        assert_eq!(encoded[2], 0x0F); // Integer tag
+        assert_eq!(encoded[3], 0x00); // 0 as i8
+        assert_eq!(encoded[4], 0x16); // Enum tag
+        assert_eq!(encoded[5], 0x0B); // 11 (Meter)
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_encode_extremes() {
+        // Maximum positive scaler
+        let su_max = ScalerUnit { scaler: 127, unit: Unit::Volt };
+        let encoded_max = su_max.encode();
+        assert_eq!(encoded_max[3], 0x7F); // 127 as i8
+
+        // Minimum negative scaler
+        let su_min = ScalerUnit { scaler: -128, unit: Unit::Watt };
+        let encoded_min = su_min.encode();
+        assert_eq!(encoded_min[3], 0x80); // -128 as i8
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_basic() {
+        // Parse: 02 02 0F FE 16 1E (scaler=-2, unit=30/Wh)
+        let input = [0x02, 0x02, 0x0F, 0xFE, 0x16, 0x1E];
+        let (remaining, su) = ScalerUnit::parse(&input).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(su.scaler, -2);
+        assert_eq!(su.unit, Unit::WattHour);
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_positive_scaler() {
+        // Parse: 02 02 0F 03 16 21 (scaler=3, unit=33/Ampere)
+        let input = [0x02, 0x02, 0x0F, 0x03, 0x16, 0x21];
+        let (remaining, su) = ScalerUnit::parse(&input).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(su.scaler, 3);
+        assert_eq!(su.unit, Unit::Ampere);
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_zero_scaler() {
+        // Parse: 02 02 0F 00 16 0B (scaler=0, unit=11/Meter)
+        let input = [0x02, 0x02, 0x0F, 0x00, 0x16, 0x0B];
+        let (remaining, su) = ScalerUnit::parse(&input).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(su.scaler, 0);
+        assert_eq!(su.unit, Unit::Meter);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_roundtrip() {
+        // Test round-trip: encode → parse → verify
+        let test_cases = [
+            ScalerUnit { scaler: -2, unit: Unit::WattHour },
+            ScalerUnit { scaler: 3, unit: Unit::Ampere },
+            ScalerUnit { scaler: 0, unit: Unit::Meter },
+            ScalerUnit { scaler: -127, unit: Unit::Volt },
+            ScalerUnit { scaler: 127, unit: Unit::Watt },
+            ScalerUnit { scaler: -3, unit: Unit::VoltAmpere },
+            ScalerUnit { scaler: 1, unit: Unit::Hertz },
+        ];
+
+        for original in &test_cases {
+            let encoded = original.encode();
+            let (remaining, parsed) = ScalerUnit::parse(&encoded).unwrap();
+
+            assert_eq!(remaining.len(), 0, "Should consume all bytes");
+            assert_eq!(parsed, *original, "Round-trip failed for {:?}", original);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_real_world_examples() {
+        // Common real-world register configurations from DLMS meters
+        let examples = [
+            // Active energy (Wh) with scaler -2 (0.01 Wh precision)
+            (ScalerUnit { scaler: -2, unit: Unit::WattHour }, "Active energy register"),
+            // Reactive energy (varh) with scaler -3 (0.001 varh precision)
+            (ScalerUnit { scaler: -3, unit: Unit::VarHour }, "Reactive energy register"),
+            // Voltage (V) with scaler -1 (0.1 V precision)
+            (ScalerUnit { scaler: -1, unit: Unit::Volt }, "Voltage register"),
+            // Current (A) with scaler -2 (0.01 A precision)
+            (ScalerUnit { scaler: -2, unit: Unit::Ampere }, "Current register"),
+            // Power (W) with scaler 0 (1 W precision)
+            (ScalerUnit { scaler: 0, unit: Unit::Watt }, "Power register"),
+            // Frequency (Hz) with scaler -2 (0.01 Hz precision)
+            (ScalerUnit { scaler: -2, unit: Unit::Hertz }, "Frequency register"),
+        ];
+
+        for (su, description) in &examples {
+            let encoded = su.encode();
+            let (remaining, parsed) = ScalerUnit::parse(&encoded).unwrap();
+
+            assert_eq!(remaining.len(), 0, "{}: Should consume all bytes", description);
+            assert_eq!(parsed, *su, "{}: Round-trip failed", description);
+        }
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_invalid_structure() {
+        // Not a structure (just an integer)
+        let input = [0x0F, 0x01];
+        assert!(ScalerUnit::parse(&input).is_err());
+
+        // Structure with wrong element count (3 instead of 2)
+        let input = [0x02, 0x03, 0x0F, 0x01, 0x16, 0x1E, 0x00];
+        assert!(ScalerUnit::parse(&input).is_err());
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_invalid_element_types() {
+        // First element is not Integer (using Enum instead)
+        let input = [0x02, 0x02, 0x16, 0xFE, 0x16, 0x1E];
+        assert!(ScalerUnit::parse(&input).is_err());
+
+        // Second element is not Enum (using Integer instead)
+        let input = [0x02, 0x02, 0x0F, 0xFE, 0x0F, 0x1E];
+        assert!(ScalerUnit::parse(&input).is_err());
+    }
+
+    #[test]
+    fn test_scaler_unit_parse_invalid_unit_value() {
+        // Valid structure but invalid unit enum value (58 is reserved)
+        let input = [0x02, 0x02, 0x0F, 0xFE, 0x16, 0x3A]; // 58 is reserved
+        assert!(ScalerUnit::parse(&input).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_encode_all_common_units() {
+        // Test encoding with all commonly used units
+        let common_units = [
+            Unit::WattHour,
+            Unit::VarHour,
+            Unit::VoltAmpereHour,
+            Unit::Watt,
+            Unit::Var,
+            Unit::VoltAmpere,
+            Unit::Volt,
+            Unit::Ampere,
+            Unit::Hertz,
+            Unit::CubicMeter,
+            Unit::Liter,
+        ];
+
+        for unit in &common_units {
+            let su = ScalerUnit { scaler: -2, unit: *unit };
+            let encoded = su.encode();
+
+            // Verify structure format
+            assert_eq!(encoded[0], 0x02, "Unit {:?}: Structure tag", unit);
+            assert_eq!(encoded[1], 0x02, "Unit {:?}: Element count", unit);
+            assert_eq!(encoded[2], 0x0F, "Unit {:?}: Integer tag", unit);
+            assert_eq!(encoded[3], 0xFE, "Unit {:?}: Scaler value", unit);
+            assert_eq!(encoded[4], 0x16, "Unit {:?}: Enum tag", unit);
+            assert_eq!(encoded[5], unit.encode(), "Unit {:?}: Unit value", unit);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_scaler_unit_compatibility_with_data_structure() {
+        // Verify ScalerUnit encoding is compatible with Data::Structure encoding
+        let su = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+
+        let su_encoded = su.encode();
+
+        // Create equivalent Data::Structure manually
+        let data_structure = Data::Structure(alloc::vec![Data::Integer(-2), Data::Enum(30),]);
+        let data_encoded = data_structure.encode();
+
+        // Both should produce identical bytes
+        assert_eq!(
+            su_encoded, data_encoded,
+            "ScalerUnit encoding should match Data::Structure encoding"
+        );
+    }
+
+    #[test]
+    fn test_scaler_unit_debug_format() {
+        let su = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let debug_str = format!("{:?}", su);
+        assert!(debug_str.contains("scaler"));
+        assert!(debug_str.contains("-2"));
+        assert!(debug_str.contains("WattHour"));
+    }
+
+    #[test]
+    fn test_scaler_unit_equality() {
+        let su1 = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let su2 = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let su3 = ScalerUnit { scaler: -3, unit: Unit::WattHour };
+        let su4 = ScalerUnit { scaler: -2, unit: Unit::Ampere };
+
+        assert_eq!(su1, su2);
+        assert_ne!(su1, su3);
+        assert_ne!(su1, su4);
+    }
+
+    #[test]
+    fn test_scaler_unit_clone() {
+        let su1 = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let su2 = su1.clone();
+        assert_eq!(su1, su2);
+    }
+
+    #[test]
+    fn test_scaler_unit_copy() {
+        let su1 = ScalerUnit { scaler: -2, unit: Unit::WattHour };
+        let su2 = su1; // Copy, not move
+        assert_eq!(su1, su2);
+        assert_eq!(su1.scaler, -2); // Original still accessible (proves Copy)
     }
 }

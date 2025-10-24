@@ -16,9 +16,6 @@ use serde::{Serialize, Serializer};
 #[cfg(feature = "chrono-conversions")]
 use chrono::{Datelike, Timelike};
 
-#[cfg(feature = "jiff-conversions")]
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 #[rustfmt::skip]
