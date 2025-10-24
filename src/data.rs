@@ -5,11 +5,10 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use nom::{
-    IResult,
+    IResult, Parser,
     combinator::fail,
     multi::length_count,
     number::streaming::{be_f32, be_f64, be_i16, be_i32, be_i64, be_u16, be_u32, be_u64, i8, u8},
-    sequence::tuple,
 };
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
@@ -129,27 +128,27 @@ pub struct Time {
 
 impl Time {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, (hour, minute, second, hundredth)) = tuple((u8, u8, u8, u8))(input)?;
+        let (input, (hour, minute, second, hundredth)) = (u8, u8, u8, u8).parse(input)?;
 
         let hour = match hour {
             0xff => None,
             0..=23 => Some(hour),
-            _ => return fail(input),
+            _ => return fail().parse(input),
         };
         let minute = match minute {
             0xff => None,
             0..=59 => Some(minute),
-            _ => return fail(input),
+            _ => return fail().parse(input),
         };
         let second = match second {
             0xff => None,
             0..=59 => Some(second),
-            _ => return fail(input),
+            _ => return fail().parse(input),
         };
         let hundredth = match hundredth {
             0xff => None,
             0..=99 => Some(hundredth),
-            _ => return fail(input),
+            _ => return fail().parse(input),
         };
 
         Ok((input, Self { hour, minute, second, hundredth }))
@@ -323,11 +322,11 @@ impl Data {
             }
             DataType::Null => (input, Data::Null),
             DataType::Structure => {
-                let (input, structure) = length_count(u8, Self::parse)(input)?;
+                let (input, structure) = length_count(u8, Self::parse).parse(input)?;
                 (input, Data::Structure(structure))
             }
             DataType::OctetString => {
-                let (input, bytes) = length_count(u8, u8)(input)?;
+                let (input, bytes) = length_count(u8, u8).parse(input)?;
                 (input, Data::OctetString(bytes))
             }
             DataType::Float32 => {

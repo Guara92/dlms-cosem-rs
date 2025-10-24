@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use alloc::string::ToString;
 
-use nom::{IResult, number::complete::u8, sequence::tuple};
+use nom::{IResult, Parser, number::complete::u8};
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 
@@ -23,7 +23,7 @@ impl ObisCode {
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, (a, b, c, d, e, f)) = tuple((u8, u8, u8, u8, u8, u8))(input)?;
+        let (input, (a, b, c, d, e, f)) = (u8, u8, u8, u8, u8, u8).parse(input)?;
         Ok((input, Self::new(a, b, c, d, e, f)))
     }
 }

@@ -1,6 +1,6 @@
 use alloc::borrow::Cow;
 use hdlcparse::type3::HdlcFrame;
-use nom::{number::complete::u8, sequence::tuple};
+use nom::{Parser, number::complete::u8};
 
 use crate::{DlmsDataLinkLayer, Error};
 
@@ -22,8 +22,9 @@ struct LlcHeader {
 }
 
 fn parse_llc_header(input: &[u8]) -> Result<(&[u8], LlcHeader), Error> {
-    let (input, (dest_lsap, src_lsap, quality)) =
-        tuple::<_, _, (), _>((u8, u8, u8))(input).map_err(|_| Error::InvalidFormat)?;
+    let (input, (dest_lsap, src_lsap, quality)) = (u8, u8, u8)
+        .parse(input)
+        .map_err(|_: nom::Err<nom::error::Error<_>>| Error::InvalidFormat)?;
     if quality != 0x00 {
         return Err(Error::InvalidFormat);
     }

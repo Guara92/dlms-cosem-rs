@@ -8,7 +8,7 @@ use crate::{
 
 use alloc::{borrow::Cow, vec::Vec};
 use mbusparse::Telegram;
-use nom::{IResult, sequence::tuple};
+use nom::{IResult, Parser};
 
 #[derive(Debug)]
 pub enum MBusDataLinkLayer {}
@@ -41,19 +41,19 @@ fn parse_mbus<'i, 'f>(
                     }
                     ControlInformation::Unsegmented { header, .. } => {
                         let (user_data, _ala) = if header == HeaderType::Long {
-                            let (user_data, (m_id, ver, dt)) = tuple((u8, u8, u8))(user_data)?;
+                            let (user_data, (m_id, ver, dt)) = (u8, u8, u8).parse(user_data)?;
                             (user_data, Some((m_id, ver, dt)))
                         } else {
                             (user_data, None)
                         };
 
-                        let (user_data, (_acc, _sts, _cfg)) = tuple((u8, u8, u8))(user_data)?;
+                        let (user_data, (_acc, _sts, _cfg)) = (u8, u8, u8).parse(user_data)?;
 
                         return Ok((&input[len..], Cow::from(user_data)));
                     }
                 };
 
-                let (user_data, (_stsap, _dtsap)) = tuple((u8, u8))(user_data)?;
+                let (user_data, (_stsap, _dtsap)) = (u8, u8).parse(user_data)?;
 
                 payload.extend(user_data);
                 len += 1;
