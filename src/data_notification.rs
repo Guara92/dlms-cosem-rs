@@ -1,5 +1,5 @@
 use nom::{
-    IResult,
+    IResult, Parser,
     multi::length_value,
     number::streaming::{be_u32, u8},
 };
@@ -90,7 +90,7 @@ impl DataNotification {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, long_invoke_id_and_priority) = LongInvokeIdAndPriority::parse(input)?;
-        let (input, date_time) = length_value(u8, DateTime::parse)(input)?;
+        let (input, date_time) = length_value(u8, DateTime::parse).parse(input)?;
         let (input, notification_body) = Data::parse(input)?;
         Ok((input, Self { long_invoke_id_and_priority, date_time, notification_body }))
     }

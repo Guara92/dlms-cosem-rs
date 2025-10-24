@@ -15,10 +15,9 @@ use core::ops::{Deref, DerefMut};
 use aes::Aes128;
 use cipher::Key;
 use nom::{
-    Finish, IResult,
+    Finish, IResult, Parser,
     branch::alt,
     combinator::{all_consuming, complete, fail},
-    multi::fold_many0,
     number::streaming::u8,
 };
 #[cfg(feature = "serde")]
@@ -107,9 +106,10 @@ impl Dlms {
         Dll: DlmsDataLinkLayer<'i, I> + ?Sized,
     {
         let (output, frame) = Dll::next_frame(input)?;
-        let (_, apdu) = map_nom_error(all_consuming(complete(|input| {
-            Apdu::parse_encrypted(input, &self.key)
-        }))(frame.borrow()))?;
+        let (_, apdu) = map_nom_error(
+            all_consuming(complete(|input| Apdu::parse_encrypted(input, &self.key)))
+                .parse(frame.borrow()),
+        )?;
 
         Ok((output, apdu))
     }
@@ -148,7 +148,8 @@ impl Apdu {
                     .decrypt(key)
                     .map_err(|_| nom::Err::Failure(Error::DecryptionFailed))?;
 
-                let (_, apdu) = all_consuming(complete(Apdu::parse))(&payload)
+                let (_, apdu) = all_consuming(complete(Apdu::parse))
+                    .parse(&payload)
                     .map_err(|_| nom::Err::Failure(Error::InvalidFormat))?;
                 apdu
             }
@@ -199,11 +200,12 @@ impl Register {
         if let Some(data) = input.first() {
             match data {
                 Data::OctetString(obis_code) => {
-                    let (_, code) = all_consuming(ObisCode::parse)(obis_code)
+                    let (_, code) = all_consuming(ObisCode::parse)
+                        .parse(obis_code)
                         .map_err(|e| e.map_input(|_| input))?;
                     Ok((&input[1..], code))
                 }
-                _ => fail(input),
+                _ => fail().parse(input),
             }
         } else {
             Err(nom::Err::Incomplete(nom::Needed::new(1)))
@@ -231,7 +233,7 @@ impl Register {
                 _ => (),
             }
 
-            fail(input)
+            fail().parse(input)
         } else {
             Err(nom::Err::Incomplete(nom::Needed::new(1)))
         }
@@ -240,11 +242,11 @@ impl Register {
     fn parse_inner_nested(input: &[Data]) -> IResult<&[Data], (ObisCode, Data, Option<Unit>)> {
         if let Some(data) = input.first() {
             if let Data::Structure(data) = data {
-                let (_, inner) = complete(Self::parse_inner)(data)?;
+                let (_, inner) = complete(Self::parse_inner).parse(data)?;
                 return Ok((&input[1..], inner));
             }
 
-            fail(input)
+            fail().parse(input)
         } else {
             Err(nom::Err::Incomplete(nom::Needed::new(1)))
         }
@@ -275,7 +277,7 @@ impl Register {
 
             let unit = match Unit::try_from(unit) {
                 Ok(unit) => unit,
-                Err(_) => return fail(input),
+                Err(_) => return fail().parse(input),
             };
 
             (input, Some(unit))
@@ -288,7 +290,7 @@ impl Register {
 
     fn parse(input: &[Data]) -> IResult<&[Data], Self> {
         let (input, (obis_code, value, unit)) =
-            alt((complete(Self::parse_inner), complete(Self::parse_inner_nested)))(input)?;
+            alt((complete(Self::parse_inner), complete(Self::parse_inner_nested))).parse(input)?;
 
         Ok((input, Self { obis_code, value, unit }))
     }
@@ -322,21 +324,36 @@ impl ObisMap {
         }
     }
 
-    pub fn parse(input: &Apdu) -> IResult<(), Self> {
+    pub fn parse(input: &Apdu) -> IResult<(), Self, Error> {
         let data = match input {
             Apdu::DataNotification(DataNotification {
                 notification_body: Data::Structure(data),
                 ..
             }) => data.as_slice(),
-            _ => return fail(()),
+            _ => return Err(nom::Err::Failure(Error::InvalidFormat)),
         };
 
-        let (_, values) =
-            all_consuming(fold_many0(Register::parse, BTreeMap::new, |mut values, reg| {
-                values.insert(reg.obis_code.clone(), reg);
-                values
-            }))(data)
-            .map_err(|e| e.map_input(|_| ()))?;
+        // Parse manually without fold_many0 since &[Data] doesn't implement Input
+        let mut values = BTreeMap::new();
+        let mut remaining = data;
+
+        while !remaining.is_empty() {
+            match Register::parse(remaining) {
+                Ok((rest, reg)) => {
+                    values.insert(reg.obis_code.clone(), reg);
+                    remaining = rest;
+                }
+                Err(nom::Err::Error(_)) => break,
+                Err(nom::Err::Incomplete(_)) => {
+                    return Err(nom::Err::Failure(Error::Incomplete(None)));
+                }
+                Err(nom::Err::Failure(_)) => return Err(nom::Err::Failure(Error::InvalidFormat)),
+            }
+        }
+
+        if !remaining.is_empty() {
+            return Err(nom::Err::Failure(Error::InvalidFormat));
+        }
 
         Ok(((), Self { map: values }))
     }

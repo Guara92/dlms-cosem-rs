@@ -1,8 +1,6 @@
 use core::fmt::{self, Debug, Display};
 
-use nom::number::complete::u8 as parse_u8;
-use nom::sequence::tuple;
-
+use nom::{IResult, Parser, number::complete::u8};
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 
@@ -22,10 +20,9 @@ impl ObisCode {
         Self { a, b, c, d, e, f }
     }
 
-    pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
-        let (input, (a, b, c, d, e, f)) =
-            tuple((parse_u8, parse_u8, parse_u8, parse_u8, parse_u8, parse_u8))(input)?;
-        Ok((input, Self { a, b, c, d, e, f }))
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, (a, b, c, d, e, f)) = (u8, u8, u8, u8, u8, u8).parse(input)?;
+        Ok((input, Self::new(a, b, c, d, e, f)))
     }
 }
 

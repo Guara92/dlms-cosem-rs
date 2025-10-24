@@ -2,10 +2,10 @@ use alloc::vec::Vec;
 
 use aes::Aes128;
 use aes_gcm::Aes128Gcm;
-use aes_gcm::aead::{AeadInPlace, NewAead};
+use aes_gcm::aead::{AeadInPlace, KeyInit};
 use cipher::Key;
 use nom::{
-    IResult,
+    IResult, Parser,
     bytes::streaming::tag,
     combinator::cond,
     multi::{count, fill},
@@ -39,9 +39,9 @@ impl GeneralGloCiphering {
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, _) = tag([8])(input)?;
+        let (input, _) = tag(&[8u8][..]).parse(input)?;
         let mut system_title = [0u8; 8];
-        let (input, _) = fill(u8, &mut system_title)(input)?;
+        let (input, _) = fill(u8, &mut system_title).parse(input)?;
 
         let (input, mut payload_len) = match u8(input)? {
             (input, 0x82) => {
@@ -55,12 +55,11 @@ impl GeneralGloCiphering {
         // Green Book 9.2.7.2.4.1
         let (input, security_control) = SecurityControl::parse(input)?;
 
-        let (input, invocation_counter) = cond(
-            security_control.authentication() || security_control.encryption(),
-            be_u32,
-        )(input)?;
+        let (input, invocation_counter) =
+            cond(security_control.authentication() || security_control.encryption(), be_u32)
+                .parse(input)?;
 
-        let (input, payload) = count(u8, payload_len)(input)?;
+        let (input, payload) = count(u8, payload_len).parse(input)?;
 
         Ok((input, Self { system_title, security_control, invocation_counter, payload }))
     }
