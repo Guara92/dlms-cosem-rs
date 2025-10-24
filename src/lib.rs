@@ -42,6 +42,9 @@ pub mod hdlc;
 #[cfg(feature = "mbusparse")]
 pub mod mbus;
 
+#[cfg(test)]
+mod lib_tests;
+
 #[derive(Debug, Clone)]
 pub enum Error {
     InvalidFormat,

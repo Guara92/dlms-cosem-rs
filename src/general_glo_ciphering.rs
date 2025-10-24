@@ -65,3 +65,200 @@ impl GeneralGloCiphering {
         Ok((input, Self { system_title, security_control, invocation_counter, payload }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_basic() {
+        // Simple GeneralGloCiphering with no encryption/authentication
+        // Tag [8] + SystemTitle [8 bytes] + Length + SecurityControl + Payload
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag (length = 8 bytes system title)
+            0x4b, 0x46, 0x4d, 0x10, 0x20, 0x01, 0x12, 0xa9, // System Title (8 bytes)
+            0x05,                                           // Payload length (5 bytes total including SC and IC)
+            0x00,                                           // Security Control (no auth/enc)
+            // No invocation counter (auth/enc not set)
+            // Payload would be empty since length - 5 = 0
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.system_title, [0x4b, 0x46, 0x4d, 0x10, 0x20, 0x01, 0x12, 0xa9]);
+        assert_eq!(ggc.security_control.authentication(), false);
+        assert_eq!(ggc.security_control.encryption(), false);
+        assert_eq!(ggc.invocation_counter, None);
+        assert_eq!(ggc.payload, vec![]);
+    }
+
+    #[test]
+    fn test_parse_with_authentication() {
+        // With authentication flag set, invocation counter is included
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0x4b, 0x46, 0x4d, 0x10, 0x20, 0x01, 0x12, 0xa9, // System Title
+            0x09,                                           // Payload length (9 = 1 SC + 4 IC + 4 payload)
+            0x10,                                           // Security Control (authentication bit set)
+            0x00, 0x00, 0x00, 0x01,                        // Invocation Counter
+            0xAA, 0xBB, 0xCC, 0xDD,                        // Payload (4 bytes)
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.security_control.authentication(), true);
+        assert_eq!(ggc.security_control.encryption(), false);
+        assert_eq!(ggc.invocation_counter, Some(1));
+        assert_eq!(ggc.payload, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn test_parse_with_encryption() {
+        // With encryption flag set, invocation counter is included
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // System Title
+            0x0A,                                           // Payload length (10 = 1 SC + 4 IC + 5 payload)
+            0x20,                                           // Security Control (encryption bit set)
+            0x00, 0x00, 0x12, 0x34,                        // Invocation Counter (0x1234)
+            0x01, 0x02, 0x03, 0x04, 0x05,                  // Payload (5 bytes)
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.system_title, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        assert_eq!(ggc.security_control.authentication(), false);
+        assert_eq!(ggc.security_control.encryption(), true);
+        assert_eq!(ggc.invocation_counter, Some(0x1234));
+        assert_eq!(ggc.payload, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
+    }
+
+    #[test]
+    fn test_parse_with_auth_and_encryption() {
+        // Both authentication and encryption flags set
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, // System Title
+            0x08,                                           // Payload length (8 = 1 SC + 4 IC + 3 payload)
+            0x30,                                           // Security Control (0x30 = auth + enc)
+            0xFF, 0xFF, 0xFF, 0xFF,                        // Invocation Counter (max value)
+            0xDE, 0xAD, 0xBE,                              // Payload (3 bytes)
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.security_control.authentication(), true);
+        assert_eq!(ggc.security_control.encryption(), true);
+        assert_eq!(ggc.invocation_counter, Some(0xFFFFFFFF));
+        assert_eq!(ggc.payload, vec![0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn test_parse_with_extended_length() {
+        // Test with 0x82 extended length encoding (for payloads > 127 bytes)
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // System Title
+            0x82, 0x00, 0x0C,                              // Extended length: 0x000C = 12 bytes
+            0x30,                                           // Security Control
+            0x00, 0x00, 0x00, 0x01,                        // Invocation Counter
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11,      // Payload (7 bytes = 12 - 5)
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.invocation_counter, Some(1));
+        assert_eq!(ggc.payload.len(), 7);
+        assert_eq!(ggc.payload, vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11]);
+    }
+
+    #[test]
+    fn test_parse_with_remaining_input() {
+        // Test that parser correctly handles remaining input
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0x4b, 0x46, 0x4d, 0x10, 0x20, 0x01, 0x12, 0xa9, // System Title
+            0x06,                                           // Payload length (6 = 1 SC + 4 IC + 1 payload)
+            0x10,                                           // Security Control
+            0x00, 0x00, 0x00, 0x01,                        // Invocation Counter
+            0xAA,                                           // Payload (1 byte)
+            0xFF, 0xFF,                                     // Extra bytes that should remain
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[0xFF, 0xFF]);
+        assert_eq!(ggc.payload, vec![0xAA]);
+    }
+
+    #[test]
+    fn test_parse_empty_payload() {
+        // Test with minimal payload (only security control and invocation counter)
+        #[rustfmt::skip]
+        let input = [
+            0x08,                                           // Tag
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // System Title
+            0x05,                                           // Payload length (5 = 1 SC + 4 IC + 0 payload)
+            0x10,                                           // Security Control (auth)
+            0x00, 0x00, 0x00, 0x00,                        // Invocation Counter
+        ];
+
+        let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(ggc.payload, vec![]);
+    }
+
+    #[test]
+    fn test_clone_and_equality() {
+        #[rustfmt::skip]
+        let input = [
+            0x08,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x07,
+            0x30,
+            0x00, 0x00, 0x00, 0x42,
+            0xAA, 0xBB,
+        ];
+
+        let (_, ggc1) = GeneralGloCiphering::parse(&input).unwrap();
+        let ggc2 = ggc1.clone();
+
+        assert_eq!(ggc1, ggc2);
+        assert_eq!(ggc1.system_title, ggc2.system_title);
+        assert_eq!(ggc1.payload, ggc2.payload);
+    }
+
+    #[test]
+    fn test_debug_format() {
+        #[rustfmt::skip]
+        let input = [
+            0x08,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x06,
+            0x10,
+            0x00, 0x00, 0x00, 0x01,
+            0xAA,
+        ];
+
+        let (_, ggc) = GeneralGloCiphering::parse(&input).unwrap();
+        let debug_str = format!("{:?}", ggc);
+
+        assert!(debug_str.contains("GeneralGloCiphering"));
+        assert!(debug_str.contains("system_title"));
+        assert!(debug_str.contains("security_control"));
+        assert!(debug_str.contains("invocation_counter"));
+        assert!(debug_str.contains("payload"));
+    }
+}
