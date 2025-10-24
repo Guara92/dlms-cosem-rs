@@ -1,6 +1,6 @@
 [package]
 name = "dlms_cosem"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85.1"
 authors = ["Markus Reiter <me@reitermark.us>"]
@@ -24,3 +24,4 @@ serde = { version = "1", default-features = false, features = ["derive"], option
 [features]
 default = ["std", "mbusparse", "hdlcparse"]
 std = ["serde?/std", "nom/std"]
+encode = []  # Enable encoding/serialization functionality (building DLMS messages)

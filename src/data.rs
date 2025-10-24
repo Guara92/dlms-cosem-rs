@@ -86,6 +86,18 @@ pub struct Date {
 }
 
 impl Date {
+    #[cfg(feature = "encode")]
+    /// Encode Date to 5 bytes: year_high, year_low, month, day_of_month, day_of_week
+    /// Reference: Green Book Ed. 12, Section 4.1.6.1
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(5);
+        buffer.push_u16(self.year);
+        buffer.push_u8(self.month);
+        buffer.push_u8(self.day_of_month);
+        buffer.push_u8(self.day_of_week);
+        buffer
+    }
+
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, year) = be_u16(input)?;
         let (input, month) = u8(input)?;
@@ -127,6 +139,19 @@ pub struct Time {
 }
 
 impl Time {
+    #[cfg(feature = "encode")]
+    /// Encode Time to 4 bytes: hour, minute, second, hundredth
+    /// None values are encoded as 0xFF (wildcard per DLMS spec)
+    /// Reference: Green Book Ed. 12, Section 4.1.6.1
+    pub fn encode(&self) -> Vec<u8> {
+        vec![
+            self.hour.unwrap_or(0xFF),
+            self.minute.unwrap_or(0xFF),
+            self.second.unwrap_or(0xFF),
+            self.hundredth.unwrap_or(0xFF),
+        ]
+    }
+
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, (hour, minute, second, hundredth)) = (u8, u8, u8, u8).parse(input)?;
 
@@ -230,6 +255,20 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    #[cfg(feature = "encode")]
+    /// Encode DateTime to 12 bytes: date (5) + time (4) + offset (2) + clock_status (1)
+    /// None offset is encoded as 0x8000 (wildcard per DLMS spec)
+    /// None clock_status is encoded as 0xFF (wildcard per DLMS spec)
+    /// Reference: Green Book Ed. 12, Section 4.1.6.1
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(12);
+        buffer.push_bytes(&self.date.encode());
+        buffer.push_bytes(&self.time.encode());
+        buffer.push_i16(self.offset_minutes.unwrap_or(-0x8000));
+        buffer.push_u8(self.clock_status.as_ref().map(|cs| cs.0).unwrap_or(0xFF));
+        buffer
+    }
+
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, date) = Date::parse(input)?;
         let (input, time) = Time::parse(input)?;
@@ -301,6 +340,66 @@ pub enum Data {
     Enum(u8),
 }
 
+// ====================
+// ENCODING SUPPORT
+// ====================
+// Phase 1.1: Data Type Encoding (IMPLEMENTATION_ROADMAP.md)
+// Reference: Green Book Ed. 12, Section 4.1.6 - A-XDR encoding rules
+
+#[cfg(feature = "encode")]
+/// Helper trait for building encoded buffers with big-endian byte order
+/// All multi-byte integers MUST be big-endian per DLMS specification
+pub trait ByteBuffer {
+    fn push_u8(&mut self, value: u8);
+    fn push_u16(&mut self, value: u16); // Big-endian
+    fn push_u32(&mut self, value: u32); // Big-endian
+    fn push_u64(&mut self, value: u64); // Big-endian
+    fn push_i8(&mut self, value: i8);
+    fn push_i16(&mut self, value: i16); // Big-endian
+    fn push_i32(&mut self, value: i32); // Big-endian
+    fn push_i64(&mut self, value: i64); // Big-endian
+    fn push_bytes(&mut self, bytes: &[u8]);
+}
+
+#[cfg(feature = "encode")]
+impl ByteBuffer for Vec<u8> {
+    fn push_u8(&mut self, value: u8) {
+        self.push(value);
+    }
+
+    fn push_u16(&mut self, value: u16) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_u32(&mut self, value: u32) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_u64(&mut self, value: u64) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_i8(&mut self, value: i8) {
+        self.push(value as u8);
+    }
+
+    fn push_i16(&mut self, value: i16) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_i32(&mut self, value: i32) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_i64(&mut self, value: i64) {
+        self.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+}
+
 impl Data {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, data_type) = u8(input)?;
@@ -369,8 +468,172 @@ impl Data {
                 let (input, n) = be_u64(input)?;
                 (input, Data::Long64Unsigned(n))
             }
+            DataType::Unsigned => {
+                let (input, n) = u8(input)?;
+                (input, Data::Unsigned(n))
+            }
+            DataType::Utf8String => {
+                let (input, bytes) = length_count(u8, u8).parse(input)?;
+                let string = String::from_utf8(bytes).map_err(|_| {
+                    nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+                })?;
+                (input, Data::Utf8String(string))
+            }
             dt => unimplemented!("decoding data type {:?}", dt),
         })
+    }
+
+    #[cfg(feature = "encode")]
+    /// Encode the Data value to A-XDR format (tag + data)
+    /// Returns a Vec<u8> containing the encoded bytes
+    /// Reference: Green Book Ed. 12, Section 4.1.6
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(self.encoded_len());
+
+        match self {
+            // Null type: only the tag, no data
+            Data::Null => {
+                buffer.push_u8(0x00);
+            }
+
+            // Integer: tag + i8 value
+            Data::Integer(value) => {
+                buffer.push_u8(0x0F);
+                buffer.push_i8(*value);
+            }
+
+            // Unsigned: tag + u8 value
+            Data::Unsigned(value) => {
+                buffer.push_u8(0x11);
+                buffer.push_u8(*value);
+            }
+
+            // Long: tag + i16 value (big-endian)
+            Data::Long(value) => {
+                buffer.push_u8(0x10);
+                buffer.push_i16(*value);
+            }
+
+            // LongUnsigned: tag + u16 value (big-endian)
+            Data::LongUnsigned(value) => {
+                buffer.push_u8(0x12);
+                buffer.push_u16(*value);
+            }
+
+            // DoubleLong: tag + i32 value (big-endian)
+            Data::DoubleLong(value) => {
+                buffer.push_u8(0x05);
+                buffer.push_i32(*value);
+            }
+
+            // DoubleLongUnsigned: tag + u32 value (big-endian)
+            Data::DoubleLongUnsigned(value) => {
+                buffer.push_u8(0x06);
+                buffer.push_u32(*value);
+            }
+
+            // Long64: tag + i64 value (big-endian)
+            Data::Long64(value) => {
+                buffer.push_u8(0x14);
+                buffer.push_i64(*value);
+            }
+
+            // Long64Unsigned: tag + u64 value (big-endian)
+            Data::Long64Unsigned(value) => {
+                buffer.push_u8(0x15);
+                buffer.push_u64(*value);
+            }
+
+            // Enum: tag + u8 value
+            Data::Enum(value) => {
+                buffer.push_u8(0x16);
+                buffer.push_u8(*value);
+            }
+
+            // Float32: tag + IEEE 754 single precision (big-endian)
+            Data::Float32(value) => {
+                buffer.push_u8(0x17);
+                buffer.push_u32(value.to_bits());
+            }
+
+            // Float64: tag + IEEE 754 double precision (big-endian)
+            Data::Float64(value) => {
+                buffer.push_u8(0x18);
+                buffer.push_u64(value.to_bits());
+            }
+
+            // OctetString: tag + length + bytes
+            Data::OctetString(bytes) => {
+                buffer.push_u8(0x09);
+                buffer.push_u8(bytes.len() as u8);
+                buffer.push_bytes(bytes);
+            }
+
+            // Utf8String: tag + length + UTF-8 bytes
+            Data::Utf8String(string) => {
+                buffer.push_u8(0x0C);
+                let bytes = string.as_bytes();
+                buffer.push_u8(bytes.len() as u8);
+                buffer.push_bytes(bytes);
+            }
+
+            // DateTime: tag + encoded DateTime
+            Data::DateTime(dt) => {
+                buffer.push_u8(0x19);
+                buffer.push_bytes(&dt.encode());
+            }
+
+            // Date: tag + encoded Date
+            Data::Date(date) => {
+                buffer.push_u8(0x1A);
+                buffer.push_bytes(&date.encode());
+            }
+
+            // Time: tag + encoded Time
+            Data::Time(time) => {
+                buffer.push_u8(0x1B);
+                buffer.push_bytes(&time.encode());
+            }
+
+            // Structure: tag + count + encoded elements
+            Data::Structure(elements) => {
+                buffer.push_u8(0x02);
+                buffer.push_u8(elements.len() as u8);
+                for element in elements {
+                    buffer.push_bytes(&element.encode());
+                }
+            }
+        }
+
+        buffer
+    }
+
+    #[cfg(feature = "encode")]
+    /// Calculate the encoded length without allocating
+    /// Useful for pre-allocating buffers
+    pub fn encoded_len(&self) -> usize {
+        match self {
+            Data::Null => 1,                                  // Just the tag
+            Data::Integer(_) => 2,                            // Tag + i8
+            Data::Unsigned(_) => 2,                           // Tag + u8
+            Data::Long(_) => 3,                               // Tag + i16
+            Data::LongUnsigned(_) => 3,                       // Tag + u16
+            Data::DoubleLong(_) => 5,                         // Tag + i32
+            Data::DoubleLongUnsigned(_) => 5,                 // Tag + u32
+            Data::Long64(_) => 9,                             // Tag + i64
+            Data::Long64Unsigned(_) => 9,                     // Tag + u64
+            Data::Enum(_) => 2,                               // Tag + u8
+            Data::Float32(_) => 5,                            // Tag + f32
+            Data::Float64(_) => 9,                            // Tag + f64
+            Data::OctetString(bytes) => 1 + 1 + bytes.len(),  // Tag + length + data
+            Data::Utf8String(string) => 1 + 1 + string.len(), // Tag + length + UTF-8 bytes
+            Data::DateTime(_) => 1 + 12,                      // Tag + 12 bytes for DateTime
+            Data::Date(_) => 1 + 5,                           // Tag + 5 bytes for Date
+            Data::Time(_) => 1 + 4,                           // Tag + 4 bytes for Time
+            Data::Structure(elements) => {
+                1 + 1 + elements.iter().map(|e| e.encoded_len()).sum::<usize>()
+            }
+        }
     }
 }
 
@@ -546,11 +809,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not implemented")]
     fn test_data_parse_unsigned() {
-        // Unsigned is not yet implemented
+        // Unsigned type parsing
         let input = [0x11, 0x2A];
-        let _ = Data::parse(&input).unwrap();
+        let (remaining, data) = Data::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(data, Data::Unsigned(0x2A));
     }
 
     #[test]
@@ -992,5 +1257,552 @@ mod tests {
     fn test_datatype_from_u8_invalid() {
         let result = DataType::try_from(0x99u8);
         assert!(result.is_err());
+    }
+
+    // ====================
+    // ENCODING TESTS (TDD)
+    // ====================
+    // Following Phase 1.1 of IMPLEMENTATION_ROADMAP.md
+    // Green Book Ed. 12: Section 4.1.5 - Encoding of data types
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_null() {
+        // Green Book: Data type 0x00 = Null, no content
+        let data = Data::Null;
+        let encoded = data.encode();
+
+        // Expected: [0x00] - just the type tag
+        assert_eq!(encoded, vec![0x00]);
+        assert_eq!(data.encoded_len(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_null_roundtrip() {
+        let original = Data::Null;
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_integer() {
+        // Green Book: Data type 0x0F = Integer (i8)
+        let data = Data::Integer(42);
+        let encoded = data.encode();
+
+        // Expected: [0x0F, 0x2A] - type tag + value
+        assert_eq!(encoded, vec![0x0F, 0x2A]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_integer_negative() {
+        let data = Data::Integer(-42);
+        let encoded = data.encode();
+
+        // Expected: [0x0F, 0xD6] - type tag + two's complement
+        assert_eq!(encoded, vec![0x0F, 0xD6]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_integer_roundtrip() {
+        let original = Data::Integer(-123);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_unsigned() {
+        // Green Book: Data type 0x11 = Unsigned (u8)
+        let data = Data::Unsigned(255);
+        let encoded = data.encode();
+
+        // Expected: [0x11, 0xFF]
+        assert_eq!(encoded, vec![0x11, 0xFF]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_unsigned_roundtrip() {
+        let original = Data::Unsigned(200);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long() {
+        // Green Book: Data type 0x10 = Long (i16), big-endian
+        let data = Data::Long(1234);
+        let encoded = data.encode();
+
+        // Expected: [0x10, 0x04, 0xD2] - type tag + big-endian i16
+        assert_eq!(encoded, vec![0x10, 0x04, 0xD2]);
+        assert_eq!(data.encoded_len(), 3);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long_negative() {
+        let data = Data::Long(-1234);
+        let encoded = data.encode();
+
+        // Expected: [0x10, 0xFB, 0x2E]
+        assert_eq!(encoded, vec![0x10, 0xFB, 0x2E]);
+        assert_eq!(data.encoded_len(), 3);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long_roundtrip() {
+        let original = Data::Long(-5678);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long_unsigned() {
+        // Green Book: Data type 0x12 = LongUnsigned (u16), big-endian
+        let data = Data::LongUnsigned(65535);
+        let encoded = data.encode();
+
+        // Expected: [0x12, 0xFF, 0xFF]
+        assert_eq!(encoded, vec![0x12, 0xFF, 0xFF]);
+        assert_eq!(data.encoded_len(), 3);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long_unsigned_roundtrip() {
+        let original = Data::LongUnsigned(12345);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_double_long() {
+        // Green Book: Data type 0x05 = DoubleLong (i32), big-endian
+        let data = Data::DoubleLong(123456789);
+        let encoded = data.encode();
+
+        // Expected: [0x05, 0x07, 0x5B, 0xCD, 0x15]
+        assert_eq!(encoded, vec![0x05, 0x07, 0x5B, 0xCD, 0x15]);
+        assert_eq!(data.encoded_len(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_double_long_roundtrip() {
+        let original = Data::DoubleLong(-987654321);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_double_long_unsigned() {
+        // Green Book: Data type 0x06 = DoubleLongUnsigned (u32)
+        let data = Data::DoubleLongUnsigned(4294967295);
+        let encoded = data.encode();
+
+        // Expected: [0x06, 0xFF, 0xFF, 0xFF, 0xFF]
+        assert_eq!(encoded, vec![0x06, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(data.encoded_len(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_double_long_unsigned_roundtrip() {
+        let original = Data::DoubleLongUnsigned(123456789);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long64() {
+        // Green Book: Data type 0x14 = Long64 (i64), big-endian
+        let data = Data::Long64(9223372036854775807);
+        let encoded = data.encode();
+
+        // Expected: [0x14, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        assert_eq!(encoded, vec![0x14, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(data.encoded_len(), 9);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long64_roundtrip() {
+        let original = Data::Long64(-1234567890123456789);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long64_unsigned() {
+        // Green Book: Data type 0x15 = Long64Unsigned (u64)
+        let data = Data::Long64Unsigned(18446744073709551615);
+        let encoded = data.encode();
+
+        // Expected: [0x15, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        assert_eq!(encoded, vec![0x15, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(data.encoded_len(), 9);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_long64_unsigned_roundtrip() {
+        let original = Data::Long64Unsigned(9876543210123456789);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_enum() {
+        // Green Book: Data type 0x16 = Enum (u8)
+        let data = Data::Enum(42);
+        let encoded = data.encode();
+
+        // Expected: [0x16, 0x2A]
+        assert_eq!(encoded, vec![0x16, 0x2A]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_enum_roundtrip() {
+        let original = Data::Enum(255);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_float32() {
+        // Green Book: Data type 0x17 = Float32 (IEEE 754 single precision, big-endian)
+        let data = Data::Float32(42.0);
+        let encoded = data.encode();
+
+        // Expected: [0x17, 0x42, 0x28, 0x00, 0x00]
+        assert_eq!(encoded, vec![0x17, 0x42, 0x28, 0x00, 0x00]);
+        assert_eq!(data.encoded_len(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_float32_negative() {
+        let data = Data::Float32(-3.14);
+        let encoded = data.encode();
+
+        // Expected: [0x17] + big-endian IEEE 754 representation
+        assert_eq!(encoded[0], 0x17);
+        assert_eq!(data.encoded_len(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_float32_roundtrip() {
+        let original = Data::Float32(123.456);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_float64() {
+        // Green Book: Data type 0x18 = Float64 (IEEE 754 double precision, big-endian)
+        let data = Data::Float64(42.0);
+        let encoded = data.encode();
+
+        // Expected: [0x18, 0x40, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        assert_eq!(encoded, vec![0x18, 0x40, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(data.encoded_len(), 9);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_float64_roundtrip() {
+        let original = Data::Float64(-987.654321);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_octet_string() {
+        // Green Book: Data type 0x09 = OctetString, length-prefixed
+        let data = Data::OctetString(vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        let encoded = data.encode();
+
+        // Expected: [0x09, 0x04, 0xAA, 0xBB, 0xCC, 0xDD]
+        assert_eq!(encoded, vec![0x09, 0x04, 0xAA, 0xBB, 0xCC, 0xDD]);
+        assert_eq!(data.encoded_len(), 6);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_octet_string_empty() {
+        let data = Data::OctetString(vec![]);
+        let encoded = data.encode();
+
+        // Expected: [0x09, 0x00]
+        assert_eq!(encoded, vec![0x09, 0x00]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_octet_string_roundtrip() {
+        let original = Data::OctetString(vec![0x01, 0x02, 0x03, 0x04, 0x05]);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_utf8_string() {
+        // Green Book: Data type 0x0C = Utf8String, length-prefixed
+        let data = Data::Utf8String("Hello".to_string());
+        let encoded = data.encode();
+
+        // Expected: [0x0C, 0x05, 'H', 'e', 'l', 'l', 'o']
+        assert_eq!(encoded, vec![0x0C, 0x05, b'H', b'e', b'l', b'l', b'o']);
+        assert_eq!(data.encoded_len(), 7);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_utf8_string_empty() {
+        let data = Data::Utf8String(String::new());
+        let encoded = data.encode();
+
+        // Expected: [0x0C, 0x00]
+        assert_eq!(encoded, vec![0x0C, 0x00]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_date() {
+        // Green Book: Data type 0x1A = Date (5 bytes)
+        let date = Date { year: 2024, month: 12, day_of_month: 25, day_of_week: 3 };
+        let data = Data::Date(date);
+        let encoded = data.encode();
+
+        // Expected: [0x1A, year_high, year_low, month, day_of_month, day_of_week]
+        // 2024 = 0x07E8
+        assert_eq!(encoded, vec![0x1A, 0x07, 0xE8, 0x0C, 0x19, 0x03]);
+        assert_eq!(data.encoded_len(), 6);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_date_roundtrip() {
+        let date = Date { year: 2025, month: 1, day_of_month: 24, day_of_week: 5 };
+        let original = Data::Date(date);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_time() {
+        // Green Book: Data type 0x1B = Time (4 bytes)
+        let time = Time { hour: Some(14), minute: Some(30), second: Some(45), hundredth: Some(99) };
+        let data = Data::Time(time);
+        let encoded = data.encode();
+
+        // Expected: [0x1B, 0x0E, 0x1E, 0x2D, 0x63]
+        assert_eq!(encoded, vec![0x1B, 0x0E, 0x1E, 0x2D, 0x63]);
+        assert_eq!(data.encoded_len(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_time_with_wildcards() {
+        // Test encoding with None values (wildcards = 0xFF)
+        let time = Time { hour: Some(12), minute: None, second: Some(30), hundredth: None };
+        let data = Data::Time(time);
+        let encoded = data.encode();
+
+        // Expected: [0x1B, 0x0C, 0xFF, 0x1E, 0xFF]
+        assert_eq!(encoded, vec![0x1B, 0x0C, 0xFF, 0x1E, 0xFF]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_time_roundtrip() {
+        let time = Time { hour: Some(23), minute: Some(59), second: Some(59), hundredth: Some(0) };
+        let original = Data::Time(time);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_datetime() {
+        // Green Book: Data type 0x19 = DateTime (12 bytes)
+        let date = Date { year: 2024, month: 1, day_of_month: 15, day_of_week: 1 };
+        let time = Time { hour: Some(10), minute: Some(30), second: Some(0), hundredth: Some(0) };
+        let datetime = DateTime {
+            date,
+            time,
+            offset_minutes: Some(60), // UTC+1
+            clock_status: Some(ClockStatus(0x00)),
+        };
+        let data = Data::DateTime(datetime);
+        let encoded = data.encode();
+
+        // Expected: [0x19] + date(5) + time(4) + offset(2) + status(1)
+        // 2024 = 0x07E8, offset 60 = 0x003C
+        assert_eq!(
+            encoded,
+            vec![0x19, 0x07, 0xE8, 0x01, 0x0F, 0x01, 0x0A, 0x1E, 0x00, 0x00, 0x00, 0x3C, 0x00]
+        );
+        assert_eq!(data.encoded_len(), 13);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_datetime_roundtrip() {
+        let date = Date { year: 2025, month: 12, day_of_month: 31, day_of_week: 2 };
+        let time = Time { hour: Some(23), minute: Some(59), second: Some(59), hundredth: Some(99) };
+        let datetime = DateTime {
+            date,
+            time,
+            offset_minutes: Some(-120),            // UTC-2
+            clock_status: Some(ClockStatus(0x80)), // Daylight saving
+        };
+        let original = Data::DateTime(datetime);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_structure_empty() {
+        // Green Book: Data type 0x02 = Structure, count-prefixed
+        let data = Data::Structure(vec![]);
+        let encoded = data.encode();
+
+        // Expected: [0x02, 0x00]
+        assert_eq!(encoded, vec![0x02, 0x00]);
+        assert_eq!(data.encoded_len(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_structure_simple() {
+        let data = Data::Structure(vec![Data::Integer(42), Data::LongUnsigned(1000)]);
+        let encoded = data.encode();
+
+        // Expected: [0x02, 0x02, 0x0F, 0x2A, 0x12, 0x03, 0xE8]
+        assert_eq!(encoded, vec![0x02, 0x02, 0x0F, 0x2A, 0x12, 0x03, 0xE8]);
+        assert_eq!(data.encoded_len(), 7);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_structure_nested() {
+        let inner = Data::Structure(vec![Data::Integer(1), Data::Integer(2)]);
+        let data = Data::Structure(vec![Data::Null, inner, Data::Enum(5)]);
+        let encoded = data.encode();
+
+        // Expected: [0x02, 0x03, 0x00, 0x02, 0x02, 0x0F, 0x01, 0x0F, 0x02, 0x16, 0x05]
+        assert_eq!(encoded, vec![0x02, 0x03, 0x00, 0x02, 0x02, 0x0F, 0x01, 0x0F, 0x02, 0x16, 0x05]);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_structure_roundtrip() {
+        let original = Data::Structure(vec![
+            Data::Integer(42),
+            Data::OctetString(vec![0xAA, 0xBB]),
+            Data::LongUnsigned(12345),
+        ]);
+        let encoded = original.encode();
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_encode_complex_structure() {
+        // Test a more realistic structure like scaler-unit
+        let scaler_unit = Data::Structure(vec![
+            Data::Integer(-3), // scaler
+            Data::Enum(30),    // unit (Wh)
+        ]);
+        let encoded = scaler_unit.encode();
+
+        // Expected: [0x02, 0x02, 0x0F, 0xFD, 0x16, 0x1E]
+        assert_eq!(encoded, vec![0x02, 0x02, 0x0F, 0xFD, 0x16, 0x1E]);
+        assert_eq!(scaler_unit.encoded_len(), 6);
+
+        // Verify roundtrip
+        let (remaining, parsed) = Data::parse(&encoded).unwrap();
+        assert_eq!(remaining.len(), 0);
+        assert_eq!(parsed, scaler_unit);
     }
 }
