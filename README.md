@@ -51,9 +51,15 @@ This library currently implements a subset of the DLMS/COSEM specification** (Gr
   - 75+ DLMS unit types (energy, power, voltage, current, etc.)
   - ScalerUnit structure for register scaling
 
+- GET Request/Response (Client APDUs)
+  - GET-Request-Normal, Next, WithList
+  - GET-Response-Normal, WithDataBlock, WithList
+  - 16 DataAccessResult error codes
+  - Block transfer support
+
 ### 🚧 Not Yet Implemented
 
-- **Client APDUs**: GET/SET/ACTION requests and responses
+- **Client APDUs**: SET/ACTION requests and responses
 - **Association Layer**: AARQ/AARE, RELEASE request/response
 - **Security**: Encryption, authentication, ciphering
 - **COSEM Object Model**: Register, ProfileGeneric, Clock, AssociationLN objects

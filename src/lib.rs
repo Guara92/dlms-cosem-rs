@@ -36,6 +36,7 @@ mod security_control;
 pub use security_control::SecurityControl;
 mod unit;
 pub use unit::{ScalerUnit, Unit};
+pub mod get;
 #[cfg(feature = "hdlcparse")]
 pub mod hdlc;
 #[cfg(feature = "mbusparse")]
