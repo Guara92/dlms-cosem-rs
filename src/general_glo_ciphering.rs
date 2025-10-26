@@ -4,6 +4,7 @@ use aes::Aes128;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use cipher::Key;
+#[cfg(feature = "parse")]
 use nom::{
     IResult, Parser,
     bytes::streaming::tag,
@@ -38,6 +39,7 @@ impl GeneralGloCiphering {
         Ok(self.payload)
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, _) = tag(&[8u8][..]).parse(input)?;
         let mut system_title = [0u8; 8];
@@ -87,8 +89,8 @@ mod tests {
 
         assert_eq!(remaining, &[]);
         assert_eq!(ggc.system_title, [0x4b, 0x46, 0x4d, 0x10, 0x20, 0x01, 0x12, 0xa9]);
-        assert_eq!(ggc.security_control.authentication(), false);
-        assert_eq!(ggc.security_control.encryption(), false);
+        assert!(!ggc.security_control.authentication());
+        assert!(!ggc.security_control.encryption());
         assert_eq!(ggc.invocation_counter, None);
         assert_eq!(ggc.payload, vec![]);
     }
@@ -109,8 +111,8 @@ mod tests {
         let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
 
         assert_eq!(remaining, &[]);
-        assert_eq!(ggc.security_control.authentication(), true);
-        assert_eq!(ggc.security_control.encryption(), false);
+        assert!(ggc.security_control.authentication());
+        assert!(!ggc.security_control.encryption());
         assert_eq!(ggc.invocation_counter, Some(1));
         assert_eq!(ggc.payload, vec![0xAA, 0xBB, 0xCC, 0xDD]);
     }
@@ -132,8 +134,8 @@ mod tests {
 
         assert_eq!(remaining, &[]);
         assert_eq!(ggc.system_title, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
-        assert_eq!(ggc.security_control.authentication(), false);
-        assert_eq!(ggc.security_control.encryption(), true);
+        assert!(!ggc.security_control.authentication());
+        assert!(ggc.security_control.encryption());
         assert_eq!(ggc.invocation_counter, Some(0x1234));
         assert_eq!(ggc.payload, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
     }
@@ -154,8 +156,8 @@ mod tests {
         let (remaining, ggc) = GeneralGloCiphering::parse(&input).unwrap();
 
         assert_eq!(remaining, &[]);
-        assert_eq!(ggc.security_control.authentication(), true);
-        assert_eq!(ggc.security_control.encryption(), true);
+        assert!(ggc.security_control.authentication());
+        assert!(ggc.security_control.encryption());
         assert_eq!(ggc.invocation_counter, Some(0xFFFFFFFF));
         assert_eq!(ggc.payload, vec![0xDE, 0xAD, 0xBE]);
     }

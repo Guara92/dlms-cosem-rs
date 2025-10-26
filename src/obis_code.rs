@@ -1,5 +1,6 @@
 use core::fmt::{self, Debug, Display};
 
+#[cfg(feature = "parse")]
 use nom::{IResult, Parser, number::complete::u8};
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
@@ -23,6 +24,7 @@ impl ObisCode {
         Self { a, b, c, d, e, f }
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, (a, b, c, d, e, f)) = (u8, u8, u8, u8, u8, u8).parse(input)?;
         Ok((input, Self::new(a, b, c, d, e, f)))
@@ -156,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "encode")]
+    #[cfg(all(feature = "encode", feature = "parse"))]
     fn test_encode_roundtrip_basic() {
         // Test encode → parse roundtrip
         let original = ObisCode::new(1, 0, 1, 8, 0, 255);
@@ -168,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "encode")]
+    #[cfg(all(feature = "encode", feature = "parse"))]
     fn test_encode_roundtrip_all_zeros() {
         let original = ObisCode::new(0, 0, 0, 0, 0, 0);
         let encoded = original.encode();
@@ -178,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "encode")]
+    #[cfg(all(feature = "encode", feature = "parse"))]
     fn test_encode_roundtrip_all_max() {
         let original = ObisCode::new(255, 255, 255, 255, 255, 255);
         let encoded = original.encode();
@@ -188,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "encode")]
+    #[cfg(all(feature = "encode", feature = "parse"))]
     fn test_encode_roundtrip_real_world_codes() {
         // Test real OBIS codes
 
@@ -224,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "encode")]
+    #[cfg(all(feature = "encode", feature = "parse"))]
     fn test_encode_with_type_roundtrip() {
         // Test encode_with_type → parse roundtrip
         // Note: parse expects raw 6 bytes, so we skip the A-XDR header
@@ -315,6 +317,7 @@ mod tests {
     // ==================== PARSING TESTS ====================
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_basic() {
         let input = [1, 2, 3, 4, 5, 6];
         let (remaining, code) = ObisCode::parse(&input).unwrap();
@@ -329,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_with_remaining() {
         let input = [10, 20, 30, 40, 50, 60, 0xFF, 0xAA];
         let (remaining, code) = ObisCode::parse(&input).unwrap();
@@ -343,6 +347,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_all_zeros() {
         let input = [0, 0, 0, 0, 0, 0];
         let (_, code) = ObisCode::parse(&input).unwrap();
@@ -351,6 +356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_all_max() {
         let input = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let (_, code) = ObisCode::parse(&input).unwrap();
@@ -359,6 +365,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_insufficient_input() {
         // Less than 6 bytes should fail
         let input = [1, 2, 3, 4, 5];
@@ -431,7 +438,7 @@ mod tests {
     #[test]
     fn test_clone() {
         let code1 = ObisCode::new(1, 0, 1, 8, 0, 255);
-        let code2 = code1.clone();
+        let code2 = code1;
 
         assert_eq!(code1, code2);
         assert_eq!(code1.a, code2.a);
@@ -450,6 +457,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parse")]
     fn test_parse_real_world_codes() {
         // Test parsing of actual OBIS codes that might be encountered
 

@@ -1,3 +1,4 @@
+#[cfg(feature = "parse")]
 use nom::{
     IResult, Parser,
     multi::length_value,
@@ -10,6 +11,7 @@ use crate::{Data, DateTime};
 pub struct LongInvokeIdAndPriority(pub(crate) u32);
 
 impl LongInvokeIdAndPriority {
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, id) = be_u32(input)?;
         Ok((input, Self(id)))
@@ -88,6 +90,7 @@ impl DataNotification {
         self.long_invoke_id_and_priority.invoke_id()
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, long_invoke_id_and_priority) = LongInvokeIdAndPriority::parse(input)?;
         let (input, date_time) = length_value(u8, DateTime::parse).parse(input)?;
@@ -166,13 +169,13 @@ mod tests {
     fn test_self_descriptive_bit() {
         // Bit 28 (0x10000000) = Self Descriptive
         let id = LongInvokeIdAndPriority(0x00000000);
-        assert_eq!(id.self_descriptive(), false);
+        assert!(!id.self_descriptive());
 
         let id = LongInvokeIdAndPriority(0x10000000);
-        assert_eq!(id.self_descriptive(), true);
+        assert!(id.self_descriptive());
 
         let id = LongInvokeIdAndPriority(0x10FFFFFF);
-        assert_eq!(id.self_descriptive(), true);
+        assert!(id.self_descriptive());
     }
 
     #[test]
@@ -182,7 +185,7 @@ mod tests {
         assert_eq!(id.priority(), Priority::High);
         assert_eq!(id.service_class(), ServiceClass::Confirmed);
         assert_eq!(id.processing_option(), ProcessingOption::BreakOnError);
-        assert_eq!(id.self_descriptive(), true);
+        assert!(id.self_descriptive());
         assert_eq!(id.invoke_id(), 0x00FFFFFF);
 
         // Test with no flags set
@@ -190,7 +193,7 @@ mod tests {
         assert_eq!(id.priority(), Priority::Normal);
         assert_eq!(id.service_class(), ServiceClass::Unconfirmed);
         assert_eq!(id.processing_option(), ProcessingOption::ContinueOnError);
-        assert_eq!(id.self_descriptive(), false);
+        assert!(!id.self_descriptive());
         assert_eq!(id.invoke_id(), 0x00000042);
     }
 
@@ -222,7 +225,7 @@ mod tests {
     #[test]
     fn test_long_invoke_id_clone() {
         let id1 = LongInvokeIdAndPriority(0x12345678);
-        let id2 = id1.clone();
+        let id2 = id1;
 
         assert_eq!(id1, id2);
         assert_eq!(id1.0, id2.0);
@@ -282,7 +285,7 @@ mod tests {
         assert_eq!(notification.priority(), Priority::High);
         assert_eq!(notification.service_class(), ServiceClass::Confirmed);
         assert_eq!(notification.invoke_id(), 1);
-        assert_eq!(notification.self_descriptive(), false);
+        assert!(!notification.self_descriptive());
         assert_eq!(notification.processing_option(), ProcessingOption::ContinueOnError);
     }
 

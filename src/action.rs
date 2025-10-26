@@ -36,6 +36,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+#[cfg(feature = "parse")]
 use nom::IResult;
 
 use crate::data::Data;
@@ -452,8 +453,8 @@ impl ActionResponse {
 }
 
 impl ActionResult {
-    /// Convert ActionResult to error code (for encoding/parsing)
     #[cfg(feature = "encode")]
+    /// Convert ActionResult to error code (for encoding/parsing)
     fn to_error_code(&self) -> u8 {
         match self {
             ActionResult::Success(_) => 0,
@@ -472,6 +473,7 @@ impl ActionResult {
         }
     }
 
+    #[cfg(feature = "parse")]
     /// Convert error code to ActionResult (for parsing)
     fn from_error_code(code: u8) -> Self {
         match code {
@@ -557,6 +559,7 @@ impl ActionRequest {
     /// let (remaining, request) = ActionRequest::parse(&data).unwrap();
     /// assert!(remaining.is_empty());
     /// ```
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::{be_u16, be_u32, u8 as nom_u8};
 
@@ -726,6 +729,7 @@ impl ActionResponse {
     /// let (remaining, response) = ActionResponse::parse(&data).unwrap();
     /// assert!(remaining.is_empty());
     /// ```
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::{be_u32, u8 as nom_u8};
 
@@ -797,6 +801,7 @@ impl ActionResponse {
 }
 
 impl ActionResult {
+    #[cfg(feature = "parse")]
     /// Parse ActionResult from bytes
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::u8 as nom_u8;
@@ -826,6 +831,7 @@ impl ActionResult {
 }
 
 impl GetDataResult {
+    #[cfg(feature = "parse")]
     /// Parse GetDataResult from bytes
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::u8 as nom_u8;
@@ -852,7 +858,7 @@ impl GetDataResult {
 // Tests
 // ============================================================================
 
-#[cfg(all(test, feature = "encode"))]
+#[cfg(all(test, feature = "encode", feature = "parse"))]
 mod tests {
     use super::*;
 

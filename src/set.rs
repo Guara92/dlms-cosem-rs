@@ -392,6 +392,7 @@ impl SetRequest {
     /// Parse SET-Request from bytes
     ///
     /// Expects input starting with the tag byte (0xC1).
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
         use nom::number::streaming::{be_u16, be_u32, u8 as nom_u8};
 
@@ -584,6 +585,7 @@ impl SetResponse {
     /// Parse SET-Response from bytes
     ///
     /// Expects input starting with the tag byte (0xC5).
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
         use nom::number::streaming::{be_u32, u8 as nom_u8};
 
@@ -702,7 +704,7 @@ impl SetResponse {
 // Tests
 // ============================================================================
 
-#[cfg(all(test, feature = "encode"))]
+#[cfg(all(test, feature = "encode", feature = "parse"))]
 mod tests {
     use super::*;
 

@@ -7,6 +7,7 @@ use serde::{Serialize, Serializer};
 #[cfg(feature = "encode")]
 use alloc::vec::Vec;
 
+#[cfg(any(feature = "parse", feature = "encode"))]
 use crate::data::Data;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
@@ -226,6 +227,7 @@ impl ScalerUnit {
 
     /// Parse ScalerUnit from A-XDR Structure(2)
     /// Expected format: Structure with 2 elements [Integer, Enum]
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> nom::IResult<&[u8], Self> {
         let (input, data) = Data::parse(input)?;
 
@@ -262,7 +264,7 @@ impl ScalerUnit {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "encode", feature = "parse"))]
 mod tests {
     use super::*;
     use core::convert::TryFrom;
@@ -391,7 +393,7 @@ mod tests {
     #[test]
     fn test_clone() {
         let unit1 = Unit::WattHour;
-        let unit2 = unit1.clone();
+        let unit2 = unit1;
         assert_eq!(unit1, unit2);
     }
 
@@ -956,7 +958,7 @@ mod tests {
     #[test]
     fn test_scaler_unit_clone() {
         let su1 = ScalerUnit { scaler: -2, unit: Unit::WattHour };
-        let su2 = su1.clone();
+        let su2 = su1;
         assert_eq!(su1, su2);
     }
 

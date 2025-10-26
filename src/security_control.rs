@@ -1,5 +1,6 @@
 use core::fmt;
 
+#[cfg(feature = "parse")]
 use nom::{IResult, number::complete::u8};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -29,6 +30,7 @@ impl SecurityControl {
   #[rustfmt::skip]
     const AUTHENTICATION_BIT: u8 = 0b00010000;
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, security_control) = u8(input)?;
         Ok((input, Self { security_control }))
@@ -87,7 +89,7 @@ impl SecurityControl {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parse"))]
 mod tests {
     use super::*;
 
@@ -127,15 +129,15 @@ mod tests {
         // Bit 4 (0x10) = Authentication
         let input = [0x00];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.authentication(), false);
+        assert!(!sc.authentication());
 
         let input = [0x10];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.authentication(), true);
+        assert!(sc.authentication());
 
         let input = [0xFF];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.authentication(), true);
+        assert!(sc.authentication());
     }
 
     #[test]
@@ -144,16 +146,16 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
 
         // Initially false
-        assert_eq!(sc.authentication(), false);
+        assert!(!sc.authentication());
 
         // Set to true
         sc.set_authentication(true);
-        assert_eq!(sc.authentication(), true);
+        assert!(sc.authentication());
         assert_eq!(sc.security_control, 0x10);
 
         // Set to false
         sc.set_authentication(false);
-        assert_eq!(sc.authentication(), false);
+        assert!(!sc.authentication());
         assert_eq!(sc.security_control, 0x00);
 
         // Test that setting authentication doesn't affect other bits
@@ -161,9 +163,9 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
         sc.set_authentication(false);
         assert_eq!(sc.security_control, 0xEF);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.encryption());
+        assert!(sc.broadcast());
+        assert!(sc.compression());
     }
 
     #[test]
@@ -171,15 +173,15 @@ mod tests {
         // Bit 5 (0x20) = Encryption
         let input = [0x00];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.encryption(), false);
+        assert!(!sc.encryption());
 
         let input = [0x20];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.encryption(), true);
+        assert!(sc.encryption());
 
         let input = [0xFF];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.encryption(), true);
+        assert!(sc.encryption());
     }
 
     #[test]
@@ -188,16 +190,16 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
 
         // Initially false
-        assert_eq!(sc.encryption(), false);
+        assert!(!sc.encryption());
 
         // Set to true
         sc.set_encryption(true);
-        assert_eq!(sc.encryption(), true);
+        assert!(sc.encryption());
         assert_eq!(sc.security_control, 0x20);
 
         // Set to false
         sc.set_encryption(false);
-        assert_eq!(sc.encryption(), false);
+        assert!(!sc.encryption());
         assert_eq!(sc.security_control, 0x00);
 
         // Test that setting encryption doesn't affect other bits
@@ -205,9 +207,9 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
         sc.set_encryption(false);
         assert_eq!(sc.security_control, 0xDF);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.authentication());
+        assert!(sc.broadcast());
+        assert!(sc.compression());
     }
 
     #[test]
@@ -215,15 +217,15 @@ mod tests {
         // Bit 6 (0x40) = Broadcast
         let input = [0x00];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.broadcast(), false);
+        assert!(!sc.broadcast());
 
         let input = [0x40];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.broadcast(), true);
+        assert!(sc.broadcast());
 
         let input = [0xFF];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.broadcast(), true);
+        assert!(sc.broadcast());
     }
 
     #[test]
@@ -232,16 +234,16 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
 
         // Initially false
-        assert_eq!(sc.broadcast(), false);
+        assert!(!sc.broadcast());
 
         // Set to true
         sc.set_broadcast(true);
-        assert_eq!(sc.broadcast(), true);
+        assert!(sc.broadcast());
         assert_eq!(sc.security_control, 0x40);
 
         // Set to false
         sc.set_broadcast(false);
-        assert_eq!(sc.broadcast(), false);
+        assert!(!sc.broadcast());
         assert_eq!(sc.security_control, 0x00);
 
         // Test that setting broadcast doesn't affect other bits
@@ -249,9 +251,9 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
         sc.set_broadcast(false);
         assert_eq!(sc.security_control, 0xBF);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(sc.compression());
     }
 
     #[test]
@@ -259,15 +261,15 @@ mod tests {
         // Bit 7 (0x80) = Compression
         let input = [0x00];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.compression(), false);
+        assert!(!sc.compression());
 
         let input = [0x80];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.compression(), true);
+        assert!(sc.compression());
 
         let input = [0xFF];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
-        assert_eq!(sc.compression(), true);
+        assert!(sc.compression());
     }
 
     #[test]
@@ -276,16 +278,16 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
 
         // Initially false
-        assert_eq!(sc.compression(), false);
+        assert!(!sc.compression());
 
         // Set to true
         sc.set_compression(true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.compression());
         assert_eq!(sc.security_control, 0x80);
 
         // Set to false
         sc.set_compression(false);
-        assert_eq!(sc.compression(), false);
+        assert!(!sc.compression());
         assert_eq!(sc.security_control, 0x00);
 
         // Test that setting compression doesn't affect other bits
@@ -293,9 +295,9 @@ mod tests {
         let (_, mut sc) = SecurityControl::parse(&input).unwrap();
         sc.set_compression(false);
         assert_eq!(sc.security_control, 0x7F);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), true);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(sc.broadcast());
     }
 
     #[test]
@@ -306,37 +308,37 @@ mod tests {
         let input = [0x00];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
         assert_eq!(sc.suite_id(), 0);
-        assert_eq!(sc.authentication(), false);
-        assert_eq!(sc.encryption(), false);
-        assert_eq!(sc.broadcast(), false);
-        assert_eq!(sc.compression(), false);
+        assert!(!sc.authentication());
+        assert!(!sc.encryption());
+        assert!(!sc.broadcast());
+        assert!(!sc.compression());
 
         // All flags set (0xF0) with suite_id = 0
         let input = [0xF0];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
         assert_eq!(sc.suite_id(), 0);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(sc.broadcast());
+        assert!(sc.compression());
 
         // All flags set (0xFF) with suite_id = 15
         let input = [0xFF];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
         assert_eq!(sc.suite_id(), 15);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), true);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(sc.broadcast());
+        assert!(sc.compression());
 
         // Authentication + Encryption (0x30) - common case
         let input = [0x30];
         let (_, sc) = SecurityControl::parse(&input).unwrap();
         assert_eq!(sc.suite_id(), 0);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), false);
-        assert_eq!(sc.compression(), false);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(!sc.broadcast());
+        assert!(!sc.compression());
     }
 
     #[test]
@@ -348,26 +350,26 @@ mod tests {
         sc.set_authentication(true);
         sc.set_encryption(true);
         assert_eq!(sc.security_control, 0x30);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), false);
-        assert_eq!(sc.compression(), false);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(!sc.broadcast());
+        assert!(!sc.compression());
 
         // Add broadcast
         sc.set_broadcast(true);
         assert_eq!(sc.security_control, 0x70);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), true);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), false);
+        assert!(sc.authentication());
+        assert!(sc.encryption());
+        assert!(sc.broadcast());
+        assert!(!sc.compression());
 
         // Remove encryption
         sc.set_encryption(false);
         assert_eq!(sc.security_control, 0x50);
-        assert_eq!(sc.authentication(), true);
-        assert_eq!(sc.encryption(), false);
-        assert_eq!(sc.broadcast(), true);
-        assert_eq!(sc.compression(), false);
+        assert!(sc.authentication());
+        assert!(!sc.encryption());
+        assert!(sc.broadcast());
+        assert!(!sc.compression());
     }
 
     #[test]

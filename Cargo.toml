@@ -20,12 +20,13 @@ jiff = { version = "0.1", default-features = false, features = ["alloc"], option
 derive-try-from-primitive = "1"
 mbusparse = { version = "0.1", default-features = false, optional = true }
 hdlcparse = { version = "2", default-features = false, optional = true }
-nom = { version = "8", default-features = false, features = ["alloc"] }
+nom = { version = "8", default-features = false, features = ["alloc"], optional = true }
 serde = { version = "1", default-features = false, features = ["derive"], optional = true }
 
 [features]
-default = ["std", "mbusparse", "hdlcparse"]
-std = ["serde?/std", "nom/std", "chrono?/std", "jiff?/std"]
+default = ["std", "parse", "mbusparse", "hdlcparse"]
+std = ["serde?/std", "nom?/std", "chrono?/std", "jiff?/std"]
+parse = ["dep:nom"]  # Enable parsing/deserialization functionality (decoding DLMS messages)
 encode = []  # Enable encoding/serialization functionality (building DLMS messages)
 chrono-conversions = ["chrono"]  # Enable chrono interoperability (from_chrono methods work in no_std, now() requires std)
 jiff-conversions = ["jiff"]  # Enable jiff interoperability (from_jiff methods work in no_std, now_jiff() requires std)

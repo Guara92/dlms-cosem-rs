@@ -1,9 +1,12 @@
 #[cfg(feature = "serde")]
 use alloc::string::ToString;
-use alloc::{string::String, vec, vec::Vec};
+#[cfg(feature = "encode")]
+use alloc::vec;
+use alloc::{string::String, vec::Vec};
 use core::convert::TryFrom;
 use core::fmt;
 
+#[cfg(feature = "parse")]
 use nom::{
     IResult, Parser,
     combinator::fail,
@@ -161,6 +164,7 @@ impl Date {
         }
     }
 
+    #[cfg(feature = "parse")]
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, year) = be_u16(input)?;
         let (input, month) = u8(input)?;
@@ -275,6 +279,7 @@ impl Time {
         }
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, (hour, minute, second, hundredth)) = (u8, u8, u8, u8).parse(input)?;
 
@@ -515,6 +520,7 @@ impl DateTime {
         Self::from_jiff(&zoned.datetime(), offset_minutes, 0x00)
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, date) = Date::parse(input)?;
         let (input, time) = Time::parse(input)?;
@@ -647,6 +653,7 @@ impl ByteBuffer for Vec<u8> {
 }
 
 impl Data {
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, data_type) = u8(input)?;
         let data_type = DataType::try_from(data_type).map_err(|_| {
@@ -1778,7 +1785,7 @@ mod tests {
     #[test]
     #[cfg(feature = "encode")]
     fn test_encode_float32_negative() {
-        let data = Data::Float32(-3.14);
+        let data = Data::Float32(-std::f32::consts::PI);
         let encoded = data.encode();
 
         // Expected: [0x17] + big-endian IEEE 754 representation

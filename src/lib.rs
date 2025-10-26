@@ -2,10 +2,13 @@
 #![deny(missing_debug_implementations)]
 
 extern crate alloc;
+#[cfg(feature = "parse")]
 use alloc::borrow::Cow;
 use alloc::collections::btree_map::BTreeMap;
 
+#[cfg(feature = "parse")]
 use core::borrow::Borrow;
+#[cfg(feature = "parse")]
 use core::convert::TryFrom;
 use core::fmt;
 use core::mem;
@@ -14,6 +17,7 @@ use core::ops::{Deref, DerefMut};
 
 use aes::Aes128;
 use cipher::Key;
+#[cfg(feature = "parse")]
 use nom::{
     Finish, IResult, Parser,
     branch::alt,
@@ -69,6 +73,7 @@ impl fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
+#[cfg(feature = "parse")]
 impl<I> nom::error::ParseError<I> for Error {
     fn from_error_kind(_input: I, _kind: nom::error::ErrorKind) -> Self {
         Error::InvalidFormat
@@ -79,6 +84,7 @@ impl<I> nom::error::ParseError<I> for Error {
     }
 }
 
+#[cfg(feature = "parse")]
 pub trait DlmsDataLinkLayer<'i, I> {
     fn next_frame(input: I) -> Result<(I, Cow<'i, [u8]>), Error>;
 }
@@ -93,6 +99,7 @@ impl Dlms {
         Dlms { key: key.into() }
     }
 
+    #[cfg(feature = "parse")]
     pub fn decrypt<'i, Dll, I>(&self, input: I) -> Result<(I, ObisMap), Error>
     where
         Dll: DlmsDataLinkLayer<'i, I> + ?Sized,
@@ -104,6 +111,7 @@ impl Dlms {
         Ok((output, obis))
     }
 
+    #[cfg(feature = "parse")]
     pub fn decrypt_apdu<'i, Dll, I>(&self, input: I) -> Result<(I, Apdu), Error>
     where
         Dll: DlmsDataLinkLayer<'i, I> + ?Sized,
@@ -118,6 +126,7 @@ impl Dlms {
     }
 }
 
+#[cfg(feature = "parse")]
 fn map_nom_error<I, O>(result: IResult<I, O, Error>) -> Result<(I, O), Error> {
     result
         .map_err(|err| match err {
@@ -138,6 +147,7 @@ pub enum Apdu {
 }
 
 impl Apdu {
+    #[cfg(feature = "parse")]
     pub fn parse_encrypted<'i>(
         input: &'i [u8],
         key: &Key<Aes128>,
@@ -162,6 +172,7 @@ impl Apdu {
         Ok((input, apdu))
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, tag) = u8(input)?;
         match tag {
@@ -199,6 +210,7 @@ impl Register {
         self.unit.as_ref()
     }
 
+    #[cfg(feature = "parse")]
     fn parse_obis_code(input: &[Data]) -> IResult<&[Data], ObisCode> {
         if let Some(data) = input.first() {
             match data {
@@ -215,6 +227,7 @@ impl Register {
         }
     }
 
+    #[cfg(feature = "parse")]
     fn parse_value(input: &[Data]) -> IResult<&[Data], Data> {
         if let Some(data) = input.first() {
             Ok((&input[1..], data.clone()))
@@ -223,6 +236,7 @@ impl Register {
         }
     }
 
+    #[cfg(feature = "parse")]
     fn parse_scaler_unit(input: &[Data]) -> IResult<&[Data], (i8, u8)> {
         if let Some(data) = input.first() {
             match data {
@@ -242,6 +256,7 @@ impl Register {
         }
     }
 
+    #[cfg(feature = "parse")]
     fn parse_inner_nested(input: &[Data]) -> IResult<&[Data], (ObisCode, Data, Option<Unit>)> {
         if let Some(data) = input.first() {
             if let Data::Structure(data) = data {
@@ -255,6 +270,7 @@ impl Register {
         }
     }
 
+    #[cfg(feature = "parse")]
     fn parse_inner(input: &[Data]) -> IResult<&[Data], (ObisCode, Data, Option<Unit>)> {
         let (input, obis_code) = Self::parse_obis_code(input)?;
         let (input, mut value) = Self::parse_value(input)?;
@@ -291,6 +307,7 @@ impl Register {
         Ok((input, (obis_code, value, unit)))
     }
 
+    #[cfg(feature = "parse")]
     fn parse(input: &[Data]) -> IResult<&[Data], Self> {
         let (input, (obis_code, value, unit)) =
             alt((complete(Self::parse_inner), complete(Self::parse_inner_nested))).parse(input)?;
@@ -327,6 +344,7 @@ impl ObisMap {
         }
     }
 
+    #[cfg(feature = "parse")]
     pub fn parse(input: &Apdu) -> IResult<(), Self, Error> {
         let data = match input {
             Apdu::DataNotification(DataNotification {

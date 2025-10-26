@@ -9,7 +9,7 @@ mod register_tests {
         let value = Data::DoubleLongUnsigned(12345);
         let unit = Some(Unit::try_from(0x1e).unwrap());
 
-        let register = Register { obis_code: obis.clone(), value: value.clone(), unit };
+        let register = Register { obis_code: obis, value: value.clone(), unit };
 
         assert_eq!(register.obis_code(), &obis);
         assert_eq!(register.value(), &value);
@@ -307,7 +307,7 @@ mod obis_map_tests {
         // Test DerefMut - can modify using BTreeMap methods
         let obis = ObisCode::new(1, 0, 2, 8, 0, 255);
         let new_reg =
-            Register { obis_code: obis.clone(), value: Data::DoubleLongUnsigned(200), unit: None };
+            Register { obis_code: obis, value: Data::DoubleLongUnsigned(200), unit: None };
         map.insert(obis, new_reg);
 
         assert_eq!(map.len(), 2);

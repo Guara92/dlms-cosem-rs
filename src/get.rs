@@ -34,6 +34,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+#[cfg(feature = "parse")]
 use nom::IResult;
 
 use crate::data::Data;
@@ -416,6 +417,7 @@ impl GetResponse {
 
 impl GetRequest {
     /// Parse a GET-Request from DLMS A-XDR format
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::{be_u16, be_u32, u8 as nom_u8};
 
@@ -496,6 +498,7 @@ impl GetRequest {
 
 impl GetResponse {
     /// Parse a GET-Response from DLMS A-XDR format
+    #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::streaming::{be_u32, u8 as nom_u8};
 
@@ -600,7 +603,7 @@ impl GetResponse {
 // TESTS
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "encode", feature = "parse"))]
 mod tests {
     use super::*;
 
