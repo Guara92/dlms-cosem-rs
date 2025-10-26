@@ -309,6 +309,88 @@ impl AuthenticationValue {
     }
 }
 
+/// Reason for release request (RLRQ)
+///
+/// Reference: ACSE A-RELEASE service, Green Book Section 11
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ReleaseRequestReason {
+    /// Normal release
+    Normal = 0,
+    /// Not finished - more data to send
+    NotFinished = 1,
+    /// User defined reason
+    UserDefined = 30,
+}
+
+impl ReleaseRequestReason {
+    /// Create from u8 value
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Normal),
+            1 => Some(Self::NotFinished),
+            30 => Some(Self::UserDefined),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8 value
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl fmt::Display for ReleaseRequestReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Normal => write!(f, "Normal"),
+            Self::NotFinished => write!(f, "Not finished"),
+            Self::UserDefined => write!(f, "User defined"),
+        }
+    }
+}
+
+/// Reason for release response (RLRE)
+///
+/// Reference: ACSE A-RELEASE service, Green Book Section 11
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ReleaseResponseReason {
+    /// Normal release acknowledgment
+    Normal = 0,
+    /// Not finished - cannot release yet
+    NotFinished = 1,
+    /// User defined reason
+    UserDefined = 30,
+}
+
+impl ReleaseResponseReason {
+    /// Create from u8 value
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Normal),
+            1 => Some(Self::NotFinished),
+            30 => Some(Self::UserDefined),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8 value
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl fmt::Display for ReleaseResponseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Normal => write!(f, "Normal"),
+            Self::NotFinished => write!(f, "Not finished"),
+            Self::UserDefined => write!(f, "User defined"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

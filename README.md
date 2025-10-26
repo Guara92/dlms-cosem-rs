@@ -93,14 +93,15 @@ This library currently implements a subset of the DLMS/COSEM specification** (Gr
   - Method invocation with optional parameters
   - Block transfer for large parameters/results
 
-- **Association Layer ** ✅ **90% Complete**
+- **Association Layer** ✅ **100% Complete**
   - ✅ AARQ/AARE (Association Request/Response)
+  - ✅ RLRQ/RLRE (Release Request/Response)
   - ✅ ASN.1 BER encoding/parsing helpers
   - ✅ Conformance bitflags (24-bit)
   - ✅ xDLMS InitiateRequest/InitiateResponse (A-XDR)
   - ✅ Authentication mechanism support (password, HLS, GMAC)
+  - ✅ Full association lifecycle (connect → work → graceful disconnect)
   - ✅ Gurux byte-exact compatibility verified
-  - 🚧 RLRQ/RLRE (Release Request/Response)
   
 ### 🚧 Not Yet Implemented
 
@@ -261,7 +262,7 @@ assert_eq!(parsed, scaler_unit);
 - ✅ **100% Safe Rust**: Zero unsafe blocks
 - ✅ **no_std Compatible**: Works in embedded environments
 - ✅ **Panic-Free**: All errors returned as Result/IResult
-- ✅ **Well-Tested**: 389 tests, >85% code coverage
+- ✅ **Well-Tested**: 537 tests (519 unit + 18 doc), >85% code coverage
 - ✅ **Green Book Compliant**: Follows DLMS UA 1000-2 Ed. 12 specification
 
 For more information, also take a look at https://github.com/reitermarkus/smart-meter-rs.

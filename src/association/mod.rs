@@ -32,6 +32,8 @@ pub use self::{
     conformance::Conformance,
     enums::*,
     initiate::{InitiateRequest, InitiateResponse},
+    rlre::RlreApdu,
+    rlrq::RlrqApdu,
 };
 
 mod aare;
@@ -40,12 +42,20 @@ mod ber;
 mod conformance;
 mod enums;
 mod initiate;
+mod rlre;
+mod rlrq;
 
 /// ASN.1 BER tag for AARQ APDU
 pub const AARQ_TAG: u8 = 0x60;
 
 /// ASN.1 BER tag for AARE APDU
 pub const AARE_TAG: u8 = 0x61;
+
+/// ASN.1 BER tag for RLRQ APDU
+pub const RLRQ_TAG: u8 = 0x62;
+
+/// ASN.1 BER tag for RLRE APDU
+pub const RLRE_TAG: u8 = 0x63;
 
 /// xDLMS VAA name for Logical Name referencing
 pub const VAA_NAME_LN: u16 = 0x0007;
@@ -67,6 +77,8 @@ mod tests {
     fn test_constants() {
         assert_eq!(AARQ_TAG, 0x60);
         assert_eq!(AARE_TAG, 0x61);
+        assert_eq!(RLRQ_TAG, 0x62);
+        assert_eq!(RLRE_TAG, 0x63);
         assert_eq!(VAA_NAME_LN, 0x0007);
         assert_eq!(VAA_NAME_SN, 0x0001);
         assert_eq!(DLMS_VERSION, 6);
@@ -432,5 +444,213 @@ mod tests {
         let has_protocol =
             encoded.windows(protocol_version_pattern.len()).any(|w| w == protocol_version_pattern);
         assert!(has_protocol, "AARQ should have protocol-version matching Gurux pattern");
+    }
+
+    /// Integration test: Full connection lifecycle (AARQ → AARE → work → RLRQ → RLRE)
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_full_connection_lifecycle() {
+        // Step 1: Establish association (AARQ → AARE)
+        let client_aarq = AarqApdu::new_simple_ln(0xFFFF);
+        let aarq_bytes = client_aarq.encode();
+        let (_, parsed_aarq) = AarqApdu::parse(&aarq_bytes).expect("Parse AARQ");
+
+        let proposed_conformance =
+            parsed_aarq.user_information.as_ref().unwrap().proposed_conformance;
+        let initiate_response = InitiateResponse::new_ln(proposed_conformance, 0x0400);
+        let server_aare = AareApdu::new_accepted(
+            ApplicationContextName::LogicalNameReferencing,
+            initiate_response,
+        );
+        let aare_bytes = server_aare.encode();
+        let (_, parsed_aare) = AareApdu::parse(&aare_bytes).expect("Parse AARE");
+        assert!(parsed_aare.is_accepted());
+
+        // Step 2: Association is now active - client/server exchange data (GET/SET/ACTION)
+        // (simulated work happens here)
+
+        // Step 3: Client initiates graceful release (RLRQ)
+        let client_rlrq = RlrqApdu::new();
+        let rlrq_bytes = client_rlrq.encode();
+
+        // Step 4: Server receives and parses RLRQ
+        let (_, parsed_rlrq) = RlrqApdu::parse(&rlrq_bytes).expect("Server failed to parse RLRQ");
+        assert_eq!(parsed_rlrq.reason, Some(ReleaseRequestReason::Normal));
+
+        // Step 5: Server acknowledges release (RLRE)
+        let server_rlre = RlreApdu::new();
+        let rlre_bytes = server_rlre.encode();
+
+        // Step 6: Client receives and parses RLRE
+        let (_, parsed_rlre) = RlreApdu::parse(&rlre_bytes).expect("Client failed to parse RLRE");
+        assert_eq!(parsed_rlre.reason, Some(ReleaseResponseReason::Normal));
+
+        // Step 7: Association is now released - connection can be closed
+    }
+
+    /// Integration test: RLRQ/RLRE with NotFinished reason
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_release_not_finished() {
+        // Client tries to release but has more data
+        let client_rlrq = RlrqApdu::with_reason(ReleaseRequestReason::NotFinished);
+        let rlrq_bytes = client_rlrq.encode();
+        let (_, parsed_rlrq) = RlrqApdu::parse(&rlrq_bytes).unwrap();
+        assert_eq!(parsed_rlrq.reason, Some(ReleaseRequestReason::NotFinished));
+
+        // Server acknowledges but also not finished
+        let server_rlre = RlreApdu::with_reason(ReleaseResponseReason::NotFinished);
+        let rlre_bytes = server_rlre.encode();
+        let (_, parsed_rlre) = RlreApdu::parse(&rlre_bytes).unwrap();
+        assert_eq!(parsed_rlre.reason, Some(ReleaseResponseReason::NotFinished));
+    }
+
+    /// Integration test: RLRQ/RLRE with user information (ciphered release)
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_ciphered_release() {
+        // In ciphered communication, user_information can carry encrypted xDLMS APDUs
+        let user_info = vec![0x01, 0x02, 0x03, 0x04]; // Simulated ciphered data
+
+        let client_rlrq = RlrqApdu::with_user_info(user_info.clone());
+        let rlrq_bytes = client_rlrq.encode();
+        let (_, parsed_rlrq) = RlrqApdu::parse(&rlrq_bytes).unwrap();
+        assert_eq!(parsed_rlrq.user_information, Some(user_info.clone()));
+
+        let server_rlre = RlreApdu::with_user_info(user_info.clone());
+        let rlre_bytes = server_rlre.encode();
+        let (_, parsed_rlre) = RlreApdu::parse(&rlre_bytes).unwrap();
+        assert_eq!(parsed_rlre.user_information, Some(user_info));
+    }
+
+    /// Gurux compatibility test: RLRQ BER tag encoding
+    #[test]
+    fn test_gurux_rlrq_tag_compatibility() {
+        // Gurux.c: RLRQ uses APPLICATION tag 2
+        // BER_TYPE_APPLICATION (0x40) | BER_TYPE_CONSTRUCTED (0x20) | 0x02 = 0x62
+        assert_eq!(RLRQ_TAG, 0x62);
+    }
+
+    /// Gurux compatibility test: RLRE BER tag encoding
+    #[test]
+    fn test_gurux_rlre_tag_compatibility() {
+        // Gurux.c: RLRE uses APPLICATION tag 3
+        // BER_TYPE_APPLICATION (0x40) | BER_TYPE_CONSTRUCTED (0x20) | 0x03 = 0x63
+        assert_eq!(RLRE_TAG, 0x63);
+    }
+
+    /// Gurux compatibility test: Minimal RLRQ encoding matches Gurux
+    #[cfg(feature = "encode")]
+    #[test]
+    fn test_gurux_rlrq_minimal_encoding() {
+        let rlrq = RlrqApdu::new();
+        let bytes = rlrq.encode();
+
+        // Gurux minimal RLRQ: [0x62][length][0x80][0x01][0x00]
+        // 0x62 = APPLICATION tag 2 (constructed)
+        // 0x80 = Context tag 0 (primitive) for reason
+        // 0x01 = Length 1
+        // 0x00 = Normal reason
+
+        assert_eq!(bytes[0], 0x62, "RLRQ tag should be 0x62");
+        assert!(bytes.contains(&0x80), "Should contain context tag 0 for reason");
+        assert!(bytes.contains(&0x00), "Should contain Normal reason (0)");
+    }
+
+    /// Gurux compatibility test: Minimal RLRE encoding matches Gurux
+    #[cfg(feature = "encode")]
+    #[test]
+    fn test_gurux_rlre_minimal_encoding() {
+        let rlre = RlreApdu::new();
+        let bytes = rlre.encode();
+
+        // Gurux minimal RLRE: [0x63][length][0x80][0x01][0x00]
+        // 0x63 = APPLICATION tag 3 (constructed)
+        // 0x80 = Context tag 0 (primitive) for reason
+        // 0x01 = Length 1
+        // 0x00 = Normal reason
+
+        assert_eq!(bytes[0], 0x63, "RLRE tag should be 0x63");
+        assert!(bytes.contains(&0x80), "Should contain context tag 0 for reason");
+        assert!(bytes.contains(&0x00), "Should contain Normal reason (0)");
+    }
+
+    /// Gurux compatibility test: RLRQ byte-exact encoding from GuruxDLMS.c
+    /// Reference: GuruxDLMS.c/development/src/client.c - cl_releaseRequest2()
+    #[cfg(feature = "encode")]
+    #[test]
+    fn test_gurux_rlrq_byte_exact() {
+        let rlrq = RlrqApdu::new();
+        let bytes = rlrq.encode();
+
+        // Gurux RLRQ encoding (from client.c):
+        // bb_setUInt8(&bb, 0x3)   - Length 3
+        // bb_setUInt8(&bb, 0x80)  - Context tag 0 (primitive)
+        // bb_setUInt8(&bb, 0x01)  - Length 1
+        // bb_setUInt8(&bb, 0x0)   - Reason Normal
+        //
+        // Then wrapped by dlms_getLnMessages with APPLICATION tag 2 (0x62)
+        //
+        // Expected: 62 03 80 01 00
+
+        assert_eq!(bytes.len(), 5, "RLRQ should be exactly 5 bytes");
+        assert_eq!(bytes[0], 0x62, "Tag should be APPLICATION 2");
+        assert_eq!(bytes[1], 0x03, "Length should be 3");
+        assert_eq!(bytes[2], 0x80, "Context tag 0 (primitive)");
+        assert_eq!(bytes[3], 0x01, "Reason length should be 1");
+        assert_eq!(bytes[4], 0x00, "Reason should be Normal (0)");
+
+        // Verify exact byte sequence matches Gurux
+        let expected_gurux: Vec<u8> = vec![0x62, 0x03, 0x80, 0x01, 0x00];
+        assert_eq!(bytes, expected_gurux, "RLRQ encoding must match Gurux byte-for-byte");
+    }
+
+    /// Gurux compatibility test: RLRE byte-exact encoding
+    /// Reference: Gurux uses same structure as RLRQ but with tag 0x63
+    #[cfg(feature = "encode")]
+    #[test]
+    fn test_gurux_rlre_byte_exact() {
+        let rlre = RlreApdu::new();
+        let bytes = rlre.encode();
+
+        // Expected: 63 03 80 01 00 (same as RLRQ but tag 0x63)
+        assert_eq!(bytes.len(), 5, "RLRE should be exactly 5 bytes");
+        assert_eq!(bytes[0], 0x63, "Tag should be APPLICATION 3");
+        assert_eq!(bytes[1], 0x03, "Length should be 3");
+        assert_eq!(bytes[2], 0x80, "Context tag 0 (primitive)");
+        assert_eq!(bytes[3], 0x01, "Reason length should be 1");
+        assert_eq!(bytes[4], 0x00, "Reason should be Normal (0)");
+
+        // Verify exact byte sequence matches Gurux
+        let expected_gurux: Vec<u8> = vec![0x63, 0x03, 0x80, 0x01, 0x00];
+        assert_eq!(bytes, expected_gurux, "RLRE encoding must match Gurux byte-for-byte");
+    }
+
+    /// Gurux compatibility test: RLRQ/RLRE parsing verifies Gurux-encoded bytes
+    #[cfg(feature = "parse")]
+    #[test]
+    fn test_gurux_rlrq_rlre_parsing() {
+        // Simulate receiving RLRQ from Gurux server
+        let gurux_rlrq = vec![0x62, 0x03, 0x80, 0x01, 0x00];
+        let (remaining, parsed_rlrq) = RlrqApdu::parse(&gurux_rlrq).expect("Parse Gurux RLRQ");
+        assert!(remaining.is_empty());
+        assert_eq!(parsed_rlrq.reason, Some(ReleaseRequestReason::Normal));
+
+        // Simulate receiving RLRE from Gurux client
+        let gurux_rlre = vec![0x63, 0x03, 0x80, 0x01, 0x00];
+        let (remaining, parsed_rlre) = RlreApdu::parse(&gurux_rlre).expect("Parse Gurux RLRE");
+        assert!(remaining.is_empty());
+        assert_eq!(parsed_rlre.reason, Some(ReleaseResponseReason::Normal));
+    }
+
+    /// Gurux compatibility test: Verify DLMS_COMMAND enum values
+    #[test]
+    fn test_gurux_command_enum_values() {
+        // From GuruxDLMS.c/development/include/enums.h:
+        // DLMS_COMMAND_RELEASE_REQUEST = 0x62,
+        // DLMS_COMMAND_RELEASE_RESPONSE = 0x63,
+
+        assert_eq!(RLRQ_TAG, 0x62, "RLRQ tag must match Gurux DLMS_COMMAND_RELEASE_REQUEST");
+        assert_eq!(RLRE_TAG, 0x63, "RLRE tag must match Gurux DLMS_COMMAND_RELEASE_RESPONSE");
     }
 }
