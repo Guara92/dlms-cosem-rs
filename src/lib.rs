@@ -41,6 +41,8 @@ pub use security_control::SecurityControl;
 mod unit;
 pub use unit::{ScalerUnit, Unit};
 pub mod action;
+#[cfg(feature = "association")]
+pub mod association;
 pub mod get;
 #[cfg(feature = "hdlcparse")]
 pub mod hdlc;

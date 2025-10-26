@@ -17,6 +17,12 @@ This library uses **optional features** to let you include only what you need:
   - Full support for all DLMS data types
   - Round-trip tested: `parse(encode(x)) == x`
   - Big-endian encoding per DLMS specification
+- **`association` (optional)**: Association Layer for connection establishment
+  - AARQ/AARE (Association Request/Response) APDUs
+  - RLRQ/RLRE (Release Request/Response) APDUs
+  - ASN.1 BER encoding/parsing for association messages
+  - Conformance negotiation, authentication support
+  - Adds ~2000 lines of code - disable for data-only use cases
 - **`chrono-conversions` (optional)**: Interoperability with the `chrono` datetime library
   - Convert between DLMS temporal types and chrono types
   - Works in both `std` and `no_std` environments
@@ -35,10 +41,11 @@ This library uses **optional features** to let you include only what you need:
 | Use Case | Features | Binary Impact |
 |----------|----------|---------------|
 | **Full-featured (default)** | `std`, `parse`, `mbusparse`, `hdlcparse` | Baseline |
-| **TX-only device** | `std`, `encode` | -100KB (no `nom`) |
-| **RX-only device** | `std`, `parse` | -10KB (no encoding) |
-| **Minimal embedded** | `encode` | Smallest (~50KB) |
-| **Parse + Encode** | `std`, `parse`, `encode` | Full functionality |
+| **Data-only parsing** | `std`, `parse` | -10KB (no encoding, no association) |
+| **Data-only encoding** | `std`, `encode` | -100KB (no `nom`, no association) |
+| **Client (connect + commands)** | `std`, `parse`, `encode`, `association` | Full client stack |
+| **Minimal embedded** | `encode` | Smallest (~50KB, data only) |
+| **Parse + Encode + Association** | `std`, `parse`, `encode`, `association` | Full functionality |
 
 ## Implementation Status
 
@@ -86,10 +93,18 @@ This library currently implements a subset of the DLMS/COSEM specification** (Gr
   - Method invocation with optional parameters
   - Block transfer for large parameters/results
 
+- **Association Layer ** ✅ **90% Complete**
+  - ✅ AARQ/AARE (Association Request/Response)
+  - ✅ ASN.1 BER encoding/parsing helpers
+  - ✅ Conformance bitflags (24-bit)
+  - ✅ xDLMS InitiateRequest/InitiateResponse (A-XDR)
+  - ✅ Authentication mechanism support (password, HLS, GMAC)
+  - ✅ Gurux byte-exact compatibility verified
+  - 🚧 RLRQ/RLRE (Release Request/Response)
+  
 ### 🚧 Not Yet Implemented
 
-- **Association Layer**: AARQ/AARE (connection handshake), RELEASE request/response
-- **Security**: Encryption, authentication, GLO/DED ciphering
+- **Security**: Encryption for outbound messages, GLO/DED ciphering
 - **COSEM Object Model**: Register, ProfileGeneric, Clock, AssociationLN and other interface classes
 - **Advanced Selective Access**: RangeDescriptor, EntryDescriptor for ProfileGeneric
 - **High-Level Client**: DlmsClient with transport layer (TCP, Serial, HDLC)

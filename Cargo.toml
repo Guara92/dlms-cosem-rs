@@ -28,5 +28,6 @@ default = ["std", "parse", "mbusparse", "hdlcparse"]
 std = ["serde?/std", "nom?/std", "chrono?/std", "jiff?/std"]
 parse = ["dep:nom"]  # Enable parsing/deserialization functionality (decoding DLMS messages)
 encode = []  # Enable encoding/serialization functionality (building DLMS messages)
+association = []  # Enable Association Layer (AARQ/AARE/RLRQ/RLRE)
 chrono-conversions = ["chrono"]  # Enable chrono interoperability (from_chrono methods work in no_std, now() requires std)
 jiff-conversions = ["jiff"]  # Enable jiff interoperability (from_jiff methods work in no_std, now_jiff() requires std)
