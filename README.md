@@ -51,20 +51,32 @@ This library currently implements a subset of the DLMS/COSEM specification** (Gr
   - 75+ DLMS unit types (energy, power, voltage, current, etc.)
   - ScalerUnit structure for register scaling
 
-- GET Request/Response (Client APDUs)
+- **GET Request/Response (Client APDUs)**
   - GET-Request-Normal, Next, WithList
   - GET-Response-Normal, WithDataBlock, WithList
   - 16 DataAccessResult error codes
   - Block transfer support
 
+- **SET Request/Response (Client APDUs)**
+  - SET-Request-Normal, FirstDataBlock, WithDataBlock, WithList
+  - SET-Response-Normal, DataBlock, LastDataBlock, WithList
+  - Selective access support
+  - Block transfer for large values
+
+- **ACTION Request/Response (Client APDUs)**
+  - ACTION-Request-Normal, NextPBlock, WithList, WithFirstPBlock, WithListAndFirstPBlock
+  - ACTION-Response-Normal, WithPBlock, WithList, NextPBlock
+  - 13 ActionResult error codes
+  - Method invocation with optional parameters
+  - Block transfer for large parameters/results
+
 ### 🚧 Not Yet Implemented
 
-- **Client APDUs**: SET/ACTION requests and responses
-- **Association Layer**: AARQ/AARE, RELEASE request/response
-- **Security**: Encryption, authentication, ciphering
-- **COSEM Object Model**: Register, ProfileGeneric, Clock, AssociationLN objects
-- **Selective Access**: RangeDescriptor, EntryDescriptor
-- **Client Implementation**: Full DLMS client with transport layer
+- **Association Layer**: AARQ/AARE (connection handshake), RELEASE request/response
+- **Security**: Encryption, authentication, GLO/DED ciphering
+- **COSEM Object Model**: Register, ProfileGeneric, Clock, AssociationLN and other interface classes
+- **Advanced Selective Access**: RangeDescriptor, EntryDescriptor for ProfileGeneric
+- **High-Level Client**: DlmsClient with transport layer (TCP, Serial, HDLC)
 
 ## Usage
 
