@@ -33,11 +33,25 @@ pub use data::*;
 mod data_notification;
 use data_notification::*;
 mod general_glo_ciphering;
-use general_glo_ciphering::GeneralGloCiphering;
+pub use general_glo_ciphering::GeneralGloCiphering;
+#[cfg(feature = "encode")]
+mod glo_apdu;
+#[cfg(feature = "encode")]
+pub use glo_apdu::{
+    GloActionRequest, GloActionResponse, GloGetRequest, GloGetResponse, GloSetRequest,
+    GloSetResponse,
+};
+#[cfg(feature = "encode")]
+mod ded_apdu;
+#[cfg(feature = "encode")]
+pub use ded_apdu::{
+    DedActionRequest, DedActionResponse, DedGetRequest, DedGetResponse, DedSetRequest,
+    DedSetResponse, GeneralDedCiphering,
+};
 mod obis_code;
 pub use obis_code::ObisCode;
 mod security_control;
-pub use security_control::SecurityControl;
+pub use security_control::{SecurityControl, SecuritySuite};
 mod unit;
 pub use unit::{ScalerUnit, Unit};
 pub mod action;
@@ -406,7 +420,7 @@ impl Serialize for ObisMap {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parse"))]
 mod test {
     use super::*;
 
