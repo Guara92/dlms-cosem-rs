@@ -57,6 +57,8 @@ pub use unit::{ScalerUnit, Unit};
 pub mod action;
 #[cfg(feature = "association")]
 pub mod association;
+#[cfg(feature = "cosem-objects")]
+pub mod cosem;
 pub mod get;
 #[cfg(feature = "hdlcparse")]
 pub mod hdlc;

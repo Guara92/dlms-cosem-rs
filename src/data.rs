@@ -83,6 +83,43 @@ impl TryFrom<u8> for DataType {
     }
 }
 
+impl DataType {
+    /// Check if this DataType represents a numeric value
+    ///
+    /// Returns `true` for integer and floating-point types:
+    /// - Integer, Unsigned
+    /// - Long, LongUnsigned
+    /// - DoubleLong, DoubleLongUnsigned
+    /// - Long64, Long64Unsigned
+    /// - Float32, Float64
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::data::DataType;
+    ///
+    /// assert!(DataType::Integer.is_numeric());
+    /// assert!(DataType::DoubleLongUnsigned.is_numeric());
+    /// assert!(DataType::Float32.is_numeric());
+    /// assert!(!DataType::OctetString.is_numeric());
+    /// assert!(!DataType::Null.is_numeric());
+    /// ```
+    pub const fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            DataType::Integer
+                | DataType::Unsigned
+                | DataType::Long
+                | DataType::LongUnsigned
+                | DataType::DoubleLong
+                | DataType::DoubleLongUnsigned
+                | DataType::Long64
+                | DataType::Long64Unsigned
+                | DataType::Float32
+                | DataType::Float64
+        )
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Date {
     pub(crate) year: u16,
@@ -575,6 +612,7 @@ pub enum Data {
     Null,
     OctetString(Vec<u8>),
     Utf8String(String),
+    BitString(Vec<u8>),
     Integer(i8),
     Unsigned(u8),
     Long(i16),
@@ -590,6 +628,43 @@ pub enum Data {
     Time(Time),
     Structure(Vec<Data>),
     Enum(u8),
+}
+
+impl Data {
+    /// Check if this Data variant is numeric (Integer, Unsigned, Long, etc.)
+    ///
+    /// Returns `true` for all numeric Data variants:
+    /// - Integer, Unsigned
+    /// - Long, LongUnsigned
+    /// - DoubleLong, DoubleLongUnsigned
+    /// - Long64, Long64Unsigned
+    /// - Float32, Float64
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::Data;
+    ///
+    /// assert!(Data::Integer(42).is_numeric());
+    /// assert!(Data::DoubleLongUnsigned(12345).is_numeric());
+    /// assert!(Data::Float32(3.14).is_numeric());
+    /// assert!(!Data::OctetString(vec![0x01, 0x02]).is_numeric());
+    /// assert!(!Data::Null.is_numeric());
+    /// ```
+    pub const fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            Data::Integer(_)
+                | Data::Unsigned(_)
+                | Data::Long(_)
+                | Data::LongUnsigned(_)
+                | Data::DoubleLong(_)
+                | Data::DoubleLongUnsigned(_)
+                | Data::Long64(_)
+                | Data::Long64Unsigned(_)
+                | Data::Float32(_)
+                | Data::Float64(_)
+        )
+    }
 }
 
 // ====================
@@ -680,6 +755,10 @@ impl Data {
             DataType::OctetString => {
                 let (input, bytes) = length_count(u8, u8).parse(input)?;
                 (input, Data::OctetString(bytes))
+            }
+            DataType::BitString => {
+                let (input, bytes) = length_count(u8, u8).parse(input)?;
+                (input, Data::BitString(bytes))
             }
             DataType::Float32 => {
                 let (input, n) = be_f32(input)?;
@@ -830,6 +909,13 @@ impl Data {
                 buffer.push_bytes(bytes);
             }
 
+            // BitString: tag + length + bytes
+            Data::BitString(bytes) => {
+                buffer.push_u8(0x04);
+                buffer.push_u8(bytes.len() as u8);
+                buffer.push_bytes(bytes);
+            }
+
             // DateTime: tag + encoded DateTime
             Data::DateTime(dt) => {
                 buffer.push_u8(0x19);
@@ -880,6 +966,7 @@ impl Data {
             Data::Float64(_) => 9,                            // Tag + f64
             Data::OctetString(bytes) => 1 + 1 + bytes.len(),  // Tag + length + data
             Data::Utf8String(string) => 1 + 1 + string.len(), // Tag + length + UTF-8 bytes
+            Data::BitString(bytes) => 1 + 1 + bytes.len(),    // Tag + length + data
             Data::DateTime(_) => 1 + 12,                      // Tag + 12 bytes for DateTime
             Data::Date(_) => 1 + 5,                           // Tag + 5 bytes for Date
             Data::Time(_) => 1 + 4,                           // Tag + 4 bytes for Time
@@ -2505,5 +2592,59 @@ mod tests {
         let (remaining, parsed) = Data::parse(&encoded).unwrap();
         assert_eq!(remaining.len(), 0);
         assert_eq!(parsed, scaler_unit);
+    }
+}
+
+#[cfg(test)]
+mod bitstring_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "parse")]
+    fn test_bitstring_parse() {
+        // BitString with 3 bytes: 0x01, 0x02, 0x03
+        let input = [0x04, 0x03, 0x01, 0x02, 0x03];
+        let (remaining, data) = Data::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(data, Data::BitString(vec![0x01, 0x02, 0x03]));
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_bitstring_encode() {
+        let data = Data::BitString(vec![0xAA, 0x55]);
+        let encoded = data.encode();
+
+        // Expected: [0x04, 0x02, 0xAA, 0x55]
+        assert_eq!(encoded, vec![0x04, 0x02, 0xAA, 0x55]);
+    }
+
+    #[test]
+    #[cfg(all(feature = "parse", feature = "encode"))]
+    fn test_bitstring_round_trip() {
+        let original = Data::BitString(vec![0b10101010, 0b01010101, 0b11110000]);
+        let encoded = original.encode();
+        let (remaining, decoded) = Data::parse(&encoded).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    #[cfg(feature = "encode")]
+    fn test_bitstring_encoded_len() {
+        let data = Data::BitString(vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(data.encoded_len(), 6); // tag (1) + length (1) + 4 bytes
+    }
+
+    #[test]
+    #[cfg(feature = "parse")]
+    fn test_bitstring_empty() {
+        let input = [0x04, 0x00];
+        let (remaining, data) = Data::parse(&input).unwrap();
+
+        assert_eq!(remaining, &[]);
+        assert_eq!(data, Data::BitString(vec![]));
     }
 }

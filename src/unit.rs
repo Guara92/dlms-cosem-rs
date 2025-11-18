@@ -102,8 +102,31 @@ impl Unit {
     }
 
     #[cfg(feature = "encode")]
-    /// Convert unit to i8 for scaler-unit structure encoding
-    /// Values 0-127 remain positive, 128-255 become negative (-128 to -1)
+    /// Convert unit enum to signed i8 for DLMS Structure encoding
+    ///
+    /// This method is used when encoding scaler_unit as Structure(Integer, Enum).
+    /// The DLMS specification requires the unit to be encoded as an Enum type,
+    /// which is represented as a signed i8 in the Structure.
+    ///
+    /// Values 0-127 map to positive i8 (0 to 127).
+    /// Values 128-255 map to negative i8 (-128 to -1).
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::Unit;
+    ///
+    /// // WattHour = 30 (0x1E) - positive value
+    /// assert_eq!(Unit::WattHour.as_i8(), 30);
+    ///
+    /// // Volt = 35 (0x23) - positive value
+    /// assert_eq!(Unit::Volt.as_i8(), 35);
+    ///
+    /// // Values >= 128 become negative
+    /// // (none in current DLMS unit table)
+    /// ```
+    ///
+    /// Reference: Green Book Ed. 12, Section 4.1.3.8 (scal_unit_type)
+    #[cfg(feature = "encode")]
     pub fn as_i8(&self) -> i8 {
         *self as u8 as i8
     }
@@ -205,12 +228,32 @@ impl Serialize for Unit {
 /// Example: scaler=-2, unit=30 (Wh) → 02 02 0F FE 16 1E
 /// Reference: Green Book Ed. 12, Section 4.1.3.8 (scal_unit_type)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ScalerUnit {
     /// Power of 10 multiplier: actual_value = raw_value * 10^scaler
     /// Example: scaler=-2 means divide by 100 (e.g., 12345 → 123.45)
     pub scaler: i8,
     /// DLMS unit enum (1-255)
     pub unit: Unit,
+}
+
+impl Default for ScalerUnit {
+    /// Returns the default ScalerUnit: scaler=0, unit=Count
+    ///
+    /// This represents a dimensionless value with no scaling (multiplier of 1).
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::ScalerUnit;
+    /// use dlms_cosem::Unit;
+    ///
+    /// let default_su = ScalerUnit::default();
+    /// assert_eq!(default_su.scaler, 0);
+    /// assert_eq!(default_su.unit, Unit::Count);
+    /// ```
+    fn default() -> Self {
+        Self { scaler: 0, unit: Unit::Count }
+    }
 }
 
 impl ScalerUnit {

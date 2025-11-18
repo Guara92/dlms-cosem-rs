@@ -864,10 +864,9 @@ mod tests {
     #[test]
     fn test_suite_roundtrip() {
         // Test that we can create, encode, parse, and get the same suite
-        let original = SecurityControl::with_suite(true, true, SecuritySuite::V2);
-
         #[cfg(feature = "encode")]
         {
+            let original = SecurityControl::with_suite(true, true, SecuritySuite::V2);
             let encoded = original.encode();
             assert_eq!(encoded, 0x32);
         }

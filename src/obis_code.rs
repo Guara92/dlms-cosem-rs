@@ -3,10 +3,14 @@ use core::fmt::{self, Debug, Display};
 #[cfg(feature = "parse")]
 use nom::{IResult, Parser, number::complete::u8};
 #[cfg(feature = "serde")]
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(feature = "encode")]
+#[cfg(any(feature = "encode", feature = "serde"))]
 extern crate alloc;
+#[cfg(feature = "serde")]
+use alloc::string::String;
+#[cfg(feature = "serde")]
+use alloc::vec::Vec;
 
 /// An OBIS code.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -90,6 +94,38 @@ impl Serialize for ObisCode {
         S: Serializer,
     {
         serializer.serialize_str(&self.to_string())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for ObisCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let parts: Vec<&str> = s.split(['-', ':']).collect();
+
+        if parts.len() != 6 {
+            return Err(serde::de::Error::custom(format!(
+                "Invalid OBIS code format: expected 6 parts, got {}",
+                parts.len()
+            )));
+        }
+
+        let parse_part = |part: &str| -> Result<u8, D::Error> {
+            part.parse::<u8>()
+                .map_err(|_| serde::de::Error::custom(format!("Invalid OBIS code part: {}", part)))
+        };
+
+        Ok(ObisCode {
+            a: parse_part(parts[0])?,
+            b: parse_part(parts[1])?,
+            c: parse_part(parts[2])?,
+            d: parse_part(parts[3])?,
+            e: parse_part(parts[4])?,
+            f: parse_part(parts[5])?,
+        })
     }
 }
 
