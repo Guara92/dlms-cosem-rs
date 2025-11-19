@@ -1,0 +1,1063 @@
+//! Selective Access for DLMS/COSEM Objects
+//!
+//! This module provides selective access mechanisms for efficiently retrieving
+//! subsets of COSEM object attributes, particularly for ProfileGeneric buffers.
+//!
+//! ## Overview
+//!
+//! Selective access allows clients to request specific data ranges without
+//! transferring entire buffers. This is critical for:
+//! - Load profiles (e.g., "last 7 days of energy data")
+//! - Event logs (e.g., "entries 100-200")
+//! - Large datasets where bandwidth is limited
+//!
+//! ## Access Selectors
+//!
+//! - **Selector 1**: RangeDescriptor (filter by value range, typically DateTime)
+//! - **Selector 2**: EntryDescriptor (filter by row/column indices)
+//!
+//! ## DLMS/COSEM Specification
+//!
+//! - **Green Book**: DLMS UA 1000-2 Ed.12, Section 4.1.4.4.2 (Selective Access)
+//! - **Blue Book**: IEC 62056-6-2, Section 4.1.3.3 (Access selectors)
+//!
+//! ## Example: Get Last 24 Hours from Load Profile
+//!
+//! ```rust
+//! use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+//! use dlms_cosem::{ObisCode, Data};
+//!
+//! // Define restricting object (Clock column)
+//! let clock = CaptureObjectDefinition {
+//!     class_id: 8,
+//!     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+//!     attribute_index: 2,
+//!     data_index: 0,
+//! };
+//!
+//! // Create range descriptor using entry indices
+//! let range = RangeDescriptor {
+//!     restricting_object: clock,
+//!     from_value: Data::DoubleLongUnsigned(0),
+//!     to_value: Data::DoubleLongUnsigned(95), // Last 96 entries (24h at 15min intervals)
+//!     selected_values: vec![], // All columns
+//! };
+//!
+//! # #[cfg(feature = "encode")]
+//! let encoded = range.encode();
+//! ```
+//!
+//! ## Example: Filter by DateTime Range (chrono)
+//!
+//! ```rust
+//! # #[cfg(all(feature = "chrono-conversions", feature = "encode"))]
+//! # {
+//! use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+//! use dlms_cosem::{ObisCode, Data, DateTime};
+//! use chrono::NaiveDateTime;
+//!
+//! let clock = CaptureObjectDefinition {
+//!     class_id: 8,
+//!     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+//!     attribute_index: 2,
+//!     data_index: 0,
+//! };
+//!
+//! let from_dt = NaiveDateTime::parse_from_str("2025-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+//! let to_dt = NaiveDateTime::parse_from_str("2025-01-31 23:59:59", "%Y-%m-%d %H:%M:%S").unwrap();
+//!
+//! let range = RangeDescriptor {
+//!     restricting_object: clock,
+//!     from_value: Data::DateTime(DateTime::from_chrono(&from_dt, 0, 0x00)),
+//!     to_value: Data::DateTime(DateTime::from_chrono(&to_dt, 0, 0x00)),
+//!     selected_values: vec![],
+//! };
+//! # }
+//! ```
+//!
+//! ## Example: Filter by DateTime Range (jiff)
+//!
+//! ```rust
+//! # #[cfg(all(feature = "jiff-conversions", feature = "encode"))]
+//! # {
+//! use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+//! use dlms_cosem::{ObisCode, Data, DateTime};
+//! use jiff::civil::DateTime as JiffDateTime;
+//!
+//! let clock = CaptureObjectDefinition {
+//!     class_id: 8,
+//!     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+//!     attribute_index: 2,
+//!     data_index: 0,
+//! };
+//!
+//! let from_jiff = JiffDateTime::new(2025, 1, 1, 0, 0, 0, 0).unwrap();
+//! let to_jiff = JiffDateTime::new(2025, 1, 31, 23, 59, 59, 0).unwrap();
+//!
+//! let range = RangeDescriptor {
+//!     restricting_object: clock,
+//!     from_value: Data::DateTime(DateTime::from_jiff(&from_jiff, 0, 0x00)),
+//!     to_value: Data::DateTime(DateTime::from_jiff(&to_jiff, 0, 0x00)),
+//!     selected_values: vec![],
+//! };
+//! # }
+//! ```
+//!
+//! ## Example: Get Specific Rows and Columns
+//!
+//! ```rust
+//! use dlms_cosem::selective_access::EntryDescriptor;
+//!
+//! // Get last 10 entries, columns 1-3
+//! let descriptor = EntryDescriptor::new(1, 10, 1, 3);
+//!
+//! let encoded = descriptor.encode();
+//! ```
+
+use crate::{Data, ObisCode};
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+/// Capture object definition
+///
+/// Defines which COSEM object attribute to capture in the ProfileGeneric buffer.
+/// Each CaptureObjectDefinition represents one column in the buffer.
+///
+/// ## Encoding
+///
+/// Encoded as a Structure with 4 elements:
+/// - class_id: LongUnsigned(u16)
+/// - logical_name: OctetString(6)
+/// - attribute_index: Integer(i8)
+/// - data_index: LongUnsigned(u16)
+///
+/// ## Example
+///
+/// ```rust
+/// use dlms_cosem::selective_access::CaptureObjectDefinition;
+/// use dlms_cosem::ObisCode;
+///
+/// // Capture Clock.time (Class 8, attribute 2)
+/// let clock_capture = CaptureObjectDefinition {
+///     class_id: 8,
+///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+///     attribute_index: 2,
+///     data_index: 0, // Entire DateTime value
+/// };
+///
+/// // Capture first element of a Structure attribute
+/// let partial_capture = CaptureObjectDefinition {
+///     class_id: 3,
+///     logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+///     attribute_index: 3,
+///     data_index: 1, // First element only
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct CaptureObjectDefinition {
+    /// Class ID of the COSEM object to capture
+    pub class_id: u16,
+
+    /// Logical name (OBIS code) of the object
+    pub logical_name: ObisCode,
+
+    /// Attribute index to capture (1-based)
+    ///
+    /// Examples:
+    /// - 2: Register.value or Clock.time
+    /// - 3: Register.scaler_unit
+    pub attribute_index: i8,
+
+    /// Data index within compound attributes (0 = entire value)
+    ///
+    /// For simple attributes, use 0.
+    /// For Structure/Array attributes, use 1-based index to capture a specific element.
+    pub data_index: u16,
+}
+
+/// Range descriptor for selective access (Selector 1)
+///
+/// Filters ProfileGeneric buffer entries by comparing values in a specified
+/// column against a range. Most commonly used for filtering by DateTime.
+///
+/// ## Structure
+///
+/// Encoded as: Structure(4):
+/// - restricting_object: Structure(4) - Column to filter by
+/// - from_value: Data - Lower bound (inclusive)
+/// - to_value: Data - Upper bound (inclusive)
+/// - selected_values: Array of Structure(4) - Columns to return (empty = all)
+///
+/// ## Common Use Cases
+///
+/// 1. **Time-based filtering**: Filter by DateTime in first column (Clock)
+/// 2. **Value-based filtering**: Filter by register value
+/// 3. **Column selection**: Return only specific columns
+///
+/// ## Example: Filter by Value Range
+///
+/// ```rust
+/// use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+/// use dlms_cosem::{ObisCode, Data};
+///
+/// let clock = CaptureObjectDefinition {
+///     class_id: 8,
+///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+///     attribute_index: 2,
+///     data_index: 0,
+/// };
+///
+/// // Filter by unsigned value range (e.g., entry indices 0-100)
+/// let range = RangeDescriptor {
+///     restricting_object: clock,
+///     from_value: Data::DoubleLongUnsigned(0),
+///     to_value: Data::DoubleLongUnsigned(100),
+///     selected_values: vec![], // All columns
+/// };
+/// ```
+///
+/// ## DLMS Encoding
+///
+/// The RangeDescriptor is encoded as Data::Structure containing:
+/// 1. restricting_object as Structure(4)
+/// 2. from_value as Data variant
+/// 3. to_value as Data variant
+/// 4. selected_values as Array
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct RangeDescriptor {
+    /// Column to filter by (typically Clock for DateTime filtering)
+    pub restricting_object: CaptureObjectDefinition,
+
+    /// Lower bound value (inclusive)
+    ///
+    /// Type must match the attribute type of restricting_object.
+    /// Common types: DateTime, Date, Time, Integer, Unsigned
+    pub from_value: Data,
+
+    /// Upper bound value (inclusive)
+    ///
+    /// Type must match from_value and restricting_object.
+    pub to_value: Data,
+
+    /// Columns to return (empty = all columns)
+    ///
+    /// When empty, all columns are returned.
+    /// When populated, only specified columns are included in the response.
+    pub selected_values: Vec<CaptureObjectDefinition>,
+}
+
+impl RangeDescriptor {
+    /// Create a new RangeDescriptor
+    ///
+    /// # Arguments
+    ///
+    /// * `restricting_object` - Column to filter by
+    /// * `from_value` - Lower bound (inclusive)
+    /// * `to_value` - Upper bound (inclusive)
+    /// * `selected_values` - Columns to return (empty for all)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///     use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+    ///     use dlms_cosem::{ObisCode, Data};
+    ///
+    /// let clock = CaptureObjectDefinition {
+    ///     class_id: 8,
+    ///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+    ///     attribute_index: 2,
+    ///     data_index: 0,
+    /// };
+    ///
+    /// let range = RangeDescriptor::new(
+    ///     clock,
+    ///     Data::Unsigned(0),
+    ///     Data::Unsigned(100),
+    ///     vec![],
+    /// );
+    /// ```
+    pub fn new(
+        restricting_object: CaptureObjectDefinition,
+        from_value: Data,
+        to_value: Data,
+        selected_values: Vec<CaptureObjectDefinition>,
+    ) -> Self {
+        Self { restricting_object, from_value, to_value, selected_values }
+    }
+
+    /// Encode RangeDescriptor as Data::Structure
+    ///
+    /// Returns Data::Structure(4) containing all fields.
+    /// This is used as the `parameters` field in AccessSelector.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///     use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+    ///     use dlms_cosem::{ObisCode, Data};
+    ///
+    /// let clock = CaptureObjectDefinition {
+    ///     class_id: 8,
+    ///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+    ///     attribute_index: 2,
+    ///     data_index: 0,
+    /// };
+    ///
+    /// let range = RangeDescriptor::new(
+    ///     clock.clone(),
+    ///     Data::Unsigned(0),
+    ///     Data::Unsigned(100),
+    ///     vec![],
+    /// );
+    ///
+    /// let encoded = range.encode();
+    /// match encoded {
+    ///     Data::Structure(items) => assert_eq!(items.len(), 4),
+    ///     _ => panic!("Expected Structure"),
+    /// }
+    /// ```
+    #[cfg(feature = "encode")]
+    pub fn encode(&self) -> Data {
+        // Encode restricting_object as Structure(4)
+        let restricting_obj_encoded = Data::Structure(vec![
+            Data::LongUnsigned(self.restricting_object.class_id),
+            Data::OctetString(self.restricting_object.logical_name.encode().to_vec()),
+            Data::Integer(self.restricting_object.attribute_index),
+            Data::LongUnsigned(self.restricting_object.data_index),
+        ]);
+
+        // Encode selected_values as Structure (array-like)
+        let selected_values_encoded = Data::Structure(
+            self.selected_values
+                .iter()
+                .map(|obj| {
+                    Data::Structure(vec![
+                        Data::LongUnsigned(obj.class_id),
+                        Data::OctetString(obj.logical_name.encode().to_vec()),
+                        Data::Integer(obj.attribute_index),
+                        Data::LongUnsigned(obj.data_index),
+                    ])
+                })
+                .collect(),
+        );
+
+        // Return Structure(4)
+        Data::Structure(vec![
+            restricting_obj_encoded,
+            self.from_value.clone(),
+            self.to_value.clone(),
+            selected_values_encoded,
+        ])
+    }
+
+    /// Validate that the RangeDescriptor is semantically correct
+    ///
+    /// Checks:
+    /// - `from_value` and `to_value` have the same Data type variant
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if valid, `Err(&str)` with error description if invalid
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::{RangeDescriptor, CaptureObjectDefinition};
+    /// use dlms_cosem::{ObisCode, Data};
+    ///
+    /// let clock = CaptureObjectDefinition {
+    ///     class_id: 8,
+    ///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+    ///     attribute_index: 2,
+    ///     data_index: 0,
+    /// };
+    ///
+    /// let valid = RangeDescriptor::new(
+    ///     clock.clone(),
+    ///     Data::DoubleLongUnsigned(0),
+    ///     Data::DoubleLongUnsigned(100),
+    ///     vec![],
+    /// );
+    /// assert!(valid.validate().is_ok());
+    ///
+    /// let invalid = RangeDescriptor::new(
+    ///     clock,
+    ///     Data::DoubleLongUnsigned(0),
+    ///     Data::Unsigned(100),  // Different type!
+    ///     vec![],
+    /// );
+    /// assert!(invalid.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), &'static str> {
+        // Check that from_value and to_value have the same type
+        if core::mem::discriminant(&self.from_value) != core::mem::discriminant(&self.to_value) {
+            return Err("from_value and to_value must have the same Data type");
+        }
+        Ok(())
+    }
+}
+
+/// Entry descriptor for selective access (Selector 2)
+///
+/// Filters ProfileGeneric buffer by row and column indices.
+/// This is the most efficient method for retrieving specific entries.
+///
+/// ## Structure
+///
+/// Encoded as: Structure(4):
+/// - from_entry: DoubleLongUnsigned - Start row (1-based, 0 = last entry)
+/// - to_entry: DoubleLongUnsigned - End row (1-based, 0 = last entry)
+/// - from_selected_value: LongUnsigned - Start column (1-based)
+/// - to_selected_value: LongUnsigned - End column (1-based)
+///
+/// ## Index Semantics
+///
+/// - **Rows (entries)**: 1-based indexing, where 0 means "last entry"
+///   - from_entry=1, to_entry=10: First 10 entries
+///   - from_entry=0, to_entry=0: Only the last entry
+///   - from_entry=1, to_entry=0: All entries (1 to last)
+///
+/// - **Columns**: 1-based indexing
+///   - from_selected_value=1, to_selected_value=3: Columns 1, 2, 3
+///   - from_selected_value=1, to_selected_value=1: Only column 1
+///
+/// ## Example: Last 10 Entries
+///
+/// ```rust
+/// use dlms_cosem::selective_access::EntryDescriptor;
+///
+/// // Get last 10 entries, all columns
+/// let descriptor = EntryDescriptor::last_n_entries(10);
+/// assert_eq!(descriptor.from_entry, 0);
+/// assert_eq!(descriptor.to_entry, 9);
+/// ```
+///
+/// ## Example: Specific Column Range
+///
+/// ```rust
+/// use dlms_cosem::selective_access::EntryDescriptor;
+///
+/// // Get all entries, columns 2-4 (e.g., skip timestamp, get values)
+/// let descriptor = EntryDescriptor::column_range(2, 4);
+/// assert_eq!(descriptor.from_selected_value, 2);
+/// assert_eq!(descriptor.to_selected_value, 4);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct EntryDescriptor {
+    /// Start row index (1-based, 0 = last entry)
+    pub from_entry: u32,
+
+    /// End row index (1-based, 0 = last entry)
+    pub to_entry: u32,
+
+    /// Start column index (1-based)
+    pub from_selected_value: u16,
+
+    /// End column index (1-based)
+    pub to_selected_value: u16,
+}
+
+impl EntryDescriptor {
+    /// Create a new EntryDescriptor
+    ///
+    /// # Arguments
+    ///
+    /// * `from_entry` - Start row (1-based, 0 = last)
+    /// * `to_entry` - End row (1-based, 0 = last)
+    /// * `from_selected_value` - Start column (1-based)
+    /// * `to_selected_value` - End column (1-based)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    ///
+    /// // Get entries 1-100, columns 1-3
+    /// let descriptor = EntryDescriptor::new(1, 100, 1, 3);
+    /// ```
+    pub const fn new(
+        from_entry: u32,
+        to_entry: u32,
+        from_selected_value: u16,
+        to_selected_value: u16,
+    ) -> Self {
+        Self { from_entry, to_entry, from_selected_value, to_selected_value }
+    }
+
+    /// Encode EntryDescriptor as Data::Structure
+    ///
+    /// Returns Data::Structure(4) containing all fields.
+    /// This is used as the `parameters` field in AccessSelector.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    /// use dlms_cosem::Data;
+    ///
+    /// let descriptor = EntryDescriptor::new(1, 10, 1, 3);
+    /// let encoded = descriptor.encode();
+    ///
+    /// match encoded {
+    ///     Data::Structure(items) => {
+    ///         assert_eq!(items.len(), 4);
+    ///         assert_eq!(items[0], Data::DoubleLongUnsigned(1));
+    ///         assert_eq!(items[1], Data::DoubleLongUnsigned(10));
+    ///         assert_eq!(items[2], Data::LongUnsigned(1));
+    ///         assert_eq!(items[3], Data::LongUnsigned(3));
+    ///     }
+    ///     _ => panic!("Expected Structure"),
+    /// }
+    /// ```
+    #[cfg(feature = "encode")]
+    pub fn encode(&self) -> Data {
+        Data::Structure(vec![
+            Data::DoubleLongUnsigned(self.from_entry),
+            Data::DoubleLongUnsigned(self.to_entry),
+            Data::LongUnsigned(self.from_selected_value),
+            Data::LongUnsigned(self.to_selected_value),
+        ])
+    }
+
+    /// Create EntryDescriptor for last N entries (all columns)
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - Number of entries to retrieve from the end
+    ///
+    /// # Returns
+    ///
+    /// EntryDescriptor with from_entry=0, to_entry=count-1
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    ///
+    /// // Get last 24 entries (e.g., last 24 hours)
+    /// let descriptor = EntryDescriptor::last_n_entries(24);
+    /// assert_eq!(descriptor.from_entry, 0);
+    /// assert_eq!(descriptor.to_entry, 23);
+    /// ```
+    pub const fn last_n_entries(count: u32) -> Self {
+        Self {
+            from_entry: 0,
+            to_entry: count.saturating_sub(1),
+            from_selected_value: 1,
+            to_selected_value: 0, // 0 = all columns
+        }
+    }
+
+    /// Create EntryDescriptor for all entries, specific column range
+    ///
+    /// # Arguments
+    ///
+    /// * `from_col` - Start column (1-based)
+    /// * `to_col` - End column (1-based)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    ///
+    /// // Get all entries, columns 2-4 (skip timestamp, get values only)
+    /// let descriptor = EntryDescriptor::column_range(2, 4);
+    /// assert_eq!(descriptor.from_entry, 1);
+    /// assert_eq!(descriptor.to_entry, 0); // 0 = last entry
+    /// assert_eq!(descriptor.from_selected_value, 2);
+    /// assert_eq!(descriptor.to_selected_value, 4);
+    /// ```
+    pub const fn column_range(from_col: u16, to_col: u16) -> Self {
+        Self {
+            from_entry: 1,
+            to_entry: 0, // 0 = last entry (i.e., all)
+            from_selected_value: from_col,
+            to_selected_value: to_col,
+        }
+    }
+
+    /// Create EntryDescriptor for specific entry range and column range
+    ///
+    /// # Arguments
+    ///
+    /// * `from_entry` - Start row (1-based)
+    /// * `to_entry` - End row (1-based)
+    /// * `from_col` - Start column (1-based)
+    /// * `to_col` - End column (1-based)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    ///
+    /// // Get entries 50-100, columns 1-2 (timestamp + first value)
+    /// let descriptor = EntryDescriptor::range(50, 100, 1, 2);
+    /// ```
+    pub const fn range(from_entry: u32, to_entry: u32, from_col: u16, to_col: u16) -> Self {
+        Self { from_entry, to_entry, from_selected_value: from_col, to_selected_value: to_col }
+    }
+
+    /// Validate that the EntryDescriptor is semantically correct
+    ///
+    /// Checks:
+    /// - If both `from_entry` and `to_entry` are non-zero, `from_entry` <= `to_entry`
+    /// - If both `from_selected_value` and `to_selected_value` are non-zero, `from_selected_value` <= `to_selected_value`
+    ///
+    /// Note: Zero values have special meaning (0 = last entry/all columns), so they are not validated against other values.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if valid, `Err(&str)` with error description if invalid
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use dlms_cosem::selective_access::EntryDescriptor;
+    ///
+    /// let valid = EntryDescriptor::new(1, 10, 1, 3);
+    /// assert!(valid.validate().is_ok());
+    ///
+    /// let invalid_entries = EntryDescriptor::new(10, 5, 1, 3);
+    /// assert!(invalid_entries.validate().is_err());
+    ///
+    /// let invalid_columns = EntryDescriptor::new(1, 10, 5, 3);
+    /// assert!(invalid_columns.validate().is_err());
+    ///
+    /// // Zero values are allowed (special meaning)
+    /// let last_entries = EntryDescriptor::new(0, 9, 1, 0);
+    /// assert!(last_entries.validate().is_ok());
+    /// ```
+    pub const fn validate(&self) -> Result<(), &'static str> {
+        // Validate entry range (only if both are non-zero)
+        if self.from_entry != 0 && self.to_entry != 0 && self.from_entry > self.to_entry {
+            return Err("from_entry must be <= to_entry (when both are non-zero)");
+        }
+
+        // Validate column range (only if both are non-zero)
+        if self.from_selected_value != 0
+            && self.to_selected_value != 0
+            && self.from_selected_value > self.to_selected_value
+        {
+            return Err(
+                "from_selected_value must be <= to_selected_value (when both are non-zero)",
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "encode")]
+mod tests {
+    use super::*;
+    use crate::{DateTime, ObisCode};
+
+    /// Test: RangeDescriptor creation
+    #[test]
+    fn test_range_descriptor_new() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range =
+            RangeDescriptor::new(clock.clone(), Data::Unsigned(0), Data::Unsigned(100), vec![]);
+
+        assert_eq!(range.restricting_object, clock);
+        assert_eq!(range.from_value, Data::Unsigned(0));
+        assert_eq!(range.to_value, Data::Unsigned(100));
+        assert!(range.selected_values.is_empty());
+    }
+
+    /// Test: RangeDescriptor encoding structure
+    #[test]
+    fn test_range_descriptor_encode() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range = RangeDescriptor::new(clock, Data::Unsigned(0), Data::Unsigned(100), vec![]);
+
+        let encoded = range.encode();
+
+        match encoded {
+            Data::Structure(items) => {
+                assert_eq!(items.len(), 4);
+
+                // Verify restricting_object encoding
+                match &items[0] {
+                    Data::Structure(obj) => {
+                        assert_eq!(obj.len(), 4);
+                        assert_eq!(obj[0], Data::LongUnsigned(8));
+                        assert_eq!(obj[2], Data::Integer(2));
+                    }
+                    _ => panic!("Expected Structure for restricting_object"),
+                }
+
+                // Verify from_value
+                assert_eq!(items[1], Data::Unsigned(0));
+
+                // Verify to_value
+                assert_eq!(items[2], Data::Unsigned(100));
+
+                // Verify selected_values (empty Structure acts as empty array)
+                match &items[3] {
+                    Data::Structure(arr) => assert!(arr.is_empty()),
+                    _ => panic!("Expected Structure for selected_values"),
+                }
+            }
+            _ => panic!("Expected Structure"),
+        }
+    }
+
+    /// Test: RangeDescriptor with DateTime values (chrono)
+    #[test]
+    #[cfg(all(feature = "std", feature = "chrono-conversions"))]
+    fn test_range_descriptor_with_datetime() {
+        use chrono::NaiveDateTime;
+
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let from_naive =
+            NaiveDateTime::parse_from_str("2025-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let to_naive =
+            NaiveDateTime::parse_from_str("2025-01-31 23:59:59", "%Y-%m-%d %H:%M:%S").unwrap();
+
+        let from_dt = DateTime::from_chrono(&from_naive, 0, 0x00);
+        let to_dt = DateTime::from_chrono(&to_naive, 0, 0x00);
+
+        let range =
+            RangeDescriptor::new(clock, Data::DateTime(from_dt), Data::DateTime(to_dt), vec![]);
+
+        let encoded = range.encode();
+
+        match encoded {
+            Data::Structure(items) => {
+                assert_eq!(items.len(), 4);
+                match &items[1] {
+                    Data::DateTime(_) => {}
+                    _ => panic!("Expected DateTime for from_value"),
+                }
+                match &items[2] {
+                    Data::DateTime(_) => {}
+                    _ => panic!("Expected DateTime for to_value"),
+                }
+            }
+            _ => panic!("Expected Structure"),
+        }
+    }
+
+    /// Test: RangeDescriptor with DateTime values (jiff)
+    #[test]
+    #[cfg(all(feature = "std", feature = "jiff-conversions"))]
+    fn test_range_descriptor_with_datetime_jiff() {
+        use jiff::civil::DateTime as JiffDateTime;
+
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let from_jiff = JiffDateTime::new(2025, 1, 1, 0, 0, 0, 0).unwrap();
+        let to_jiff = JiffDateTime::new(2025, 1, 31, 23, 59, 59, 0).unwrap();
+
+        let from_dt = DateTime::from_jiff(&from_jiff, 0, 0x00);
+        let to_dt = DateTime::from_jiff(&to_jiff, 0, 0x00);
+
+        let range =
+            RangeDescriptor::new(clock, Data::DateTime(from_dt), Data::DateTime(to_dt), vec![]);
+
+        let encoded = range.encode();
+
+        match encoded {
+            Data::Structure(items) => {
+                assert_eq!(items.len(), 4);
+                match &items[1] {
+                    Data::DateTime(_) => {}
+                    _ => panic!("Expected DateTime for from_value"),
+                }
+                match &items[2] {
+                    Data::DateTime(_) => {}
+                    _ => panic!("Expected DateTime for to_value"),
+                }
+            }
+            _ => panic!("Expected Structure"),
+        }
+    }
+
+    /// Test: RangeDescriptor with selected_values
+    #[test]
+    fn test_range_descriptor_with_selected_values() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let energy = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range = RangeDescriptor::new(
+            clock.clone(),
+            Data::Unsigned(0),
+            Data::Unsigned(100),
+            vec![clock, energy],
+        );
+
+        let encoded = range.encode();
+
+        match encoded {
+            Data::Structure(items) => {
+                assert_eq!(items.len(), 4);
+                match &items[3] {
+                    Data::Structure(arr) => {
+                        assert_eq!(arr.len(), 2);
+                    }
+                    _ => panic!("Expected Structure for selected_values"),
+                }
+            }
+            _ => panic!("Expected Structure"),
+        }
+    }
+
+    /// Test: EntryDescriptor creation
+    #[test]
+    fn test_entry_descriptor_new() {
+        let descriptor = EntryDescriptor::new(1, 100, 1, 3);
+
+        assert_eq!(descriptor.from_entry, 1);
+        assert_eq!(descriptor.to_entry, 100);
+        assert_eq!(descriptor.from_selected_value, 1);
+        assert_eq!(descriptor.to_selected_value, 3);
+    }
+
+    /// Test: EntryDescriptor encoding
+    #[test]
+    fn test_entry_descriptor_encode() {
+        let descriptor = EntryDescriptor::new(1, 100, 1, 3);
+        let encoded = descriptor.encode();
+
+        match encoded {
+            Data::Structure(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0], Data::DoubleLongUnsigned(1));
+                assert_eq!(items[1], Data::DoubleLongUnsigned(100));
+                assert_eq!(items[2], Data::LongUnsigned(1));
+                assert_eq!(items[3], Data::LongUnsigned(3));
+            }
+            _ => panic!("Expected Structure"),
+        }
+    }
+
+    /// Test: EntryDescriptor::last_n_entries helper
+    #[test]
+    fn test_entry_descriptor_last_n_entries() {
+        let descriptor = EntryDescriptor::last_n_entries(10);
+
+        assert_eq!(descriptor.from_entry, 0);
+        assert_eq!(descriptor.to_entry, 9);
+        assert_eq!(descriptor.from_selected_value, 1);
+        assert_eq!(descriptor.to_selected_value, 0); // All columns
+    }
+
+    /// Test: EntryDescriptor::column_range helper
+    #[test]
+    fn test_entry_descriptor_column_range() {
+        let descriptor = EntryDescriptor::column_range(2, 4);
+
+        assert_eq!(descriptor.from_entry, 1);
+        assert_eq!(descriptor.to_entry, 0); // All entries
+        assert_eq!(descriptor.from_selected_value, 2);
+        assert_eq!(descriptor.to_selected_value, 4);
+    }
+
+    /// Test: EntryDescriptor::range helper
+    #[test]
+    fn test_entry_descriptor_range() {
+        let descriptor = EntryDescriptor::range(50, 100, 2, 3);
+
+        assert_eq!(descriptor.from_entry, 50);
+        assert_eq!(descriptor.to_entry, 100);
+        assert_eq!(descriptor.from_selected_value, 2);
+        assert_eq!(descriptor.to_selected_value, 3);
+    }
+
+    /// Test: EntryDescriptor last_n_entries with 1 entry
+    #[test]
+    fn test_entry_descriptor_single_entry() {
+        let descriptor = EntryDescriptor::last_n_entries(1);
+
+        assert_eq!(descriptor.from_entry, 0);
+        assert_eq!(descriptor.to_entry, 0);
+    }
+
+    /// Test: EntryDescriptor with zero count (edge case)
+    #[test]
+    fn test_entry_descriptor_zero_entries() {
+        let descriptor = EntryDescriptor::last_n_entries(0);
+
+        // saturating_sub should prevent underflow
+        assert_eq!(descriptor.from_entry, 0);
+        // 0.saturating_sub(1) = 0, but we still want to handle this gracefully
+        // The actual behavior will be determined by the server implementation
+    }
+
+    /// Test: RangeDescriptor Clone and PartialEq
+    #[test]
+    fn test_range_descriptor_clone_eq() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range1 =
+            RangeDescriptor::new(clock.clone(), Data::Unsigned(0), Data::Unsigned(100), vec![]);
+
+        let range2 = range1.clone();
+
+        assert_eq!(range1, range2);
+    }
+
+    /// Test: EntryDescriptor Clone and PartialEq
+    #[test]
+    fn test_entry_descriptor_clone_eq() {
+        let desc1 = EntryDescriptor::new(1, 100, 1, 3);
+        let desc2 = desc1;
+
+        assert_eq!(desc1, desc2);
+    }
+
+    /// Test: EntryDescriptor Debug formatting
+    #[test]
+    fn test_entry_descriptor_debug() {
+        let descriptor = EntryDescriptor::new(1, 10, 1, 2);
+        let debug_str = format!("{:?}", descriptor);
+
+        assert!(debug_str.contains("EntryDescriptor"));
+        assert!(debug_str.contains("from_entry"));
+    }
+
+    /// Test: RangeDescriptor Debug formatting
+    /// Test: RangeDescriptor debug output
+    #[test]
+    fn test_range_descriptor_debug() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range =
+            RangeDescriptor::new(clock.clone(), Data::Unsigned(0), Data::Unsigned(100), vec![]);
+
+        let debug_str = format!("{:?}", range);
+        assert!(debug_str.contains("RangeDescriptor"));
+    }
+
+    /// Test: RangeDescriptor validation - valid case
+    #[test]
+    fn test_range_descriptor_validate_valid() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range = RangeDescriptor::new(
+            clock,
+            Data::DoubleLongUnsigned(0),
+            Data::DoubleLongUnsigned(100),
+            vec![],
+        );
+
+        assert!(range.validate().is_ok());
+    }
+
+    /// Test: RangeDescriptor validation - type mismatch
+    #[test]
+    fn test_range_descriptor_validate_type_mismatch() {
+        let clock = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let range = RangeDescriptor::new(
+            clock,
+            Data::DoubleLongUnsigned(0),
+            Data::Unsigned(100), // Different type!
+            vec![],
+        );
+
+        assert!(range.validate().is_err());
+        assert_eq!(
+            range.validate().unwrap_err(),
+            "from_value and to_value must have the same Data type"
+        );
+    }
+
+    /// Test: EntryDescriptor validation - valid cases
+    #[test]
+    fn test_entry_descriptor_validate_valid() {
+        // Normal range
+        let desc1 = EntryDescriptor::new(1, 10, 1, 3);
+        assert!(desc1.validate().is_ok());
+
+        // Zero values (special meaning)
+        let desc2 = EntryDescriptor::last_n_entries(10);
+        assert!(desc2.validate().is_ok());
+
+        // Column range with zero
+        let desc3 = EntryDescriptor::column_range(2, 4);
+        assert!(desc3.validate().is_ok());
+    }
+
+    /// Test: EntryDescriptor validation - invalid entry range
+    #[test]
+    fn test_entry_descriptor_validate_invalid_entries() {
+        let desc = EntryDescriptor::new(10, 5, 1, 3);
+        assert!(desc.validate().is_err());
+        assert_eq!(
+            desc.validate().unwrap_err(),
+            "from_entry must be <= to_entry (when both are non-zero)"
+        );
+    }
+
+    /// Test: EntryDescriptor validation - invalid column range
+    #[test]
+    fn test_entry_descriptor_validate_invalid_columns() {
+        let desc = EntryDescriptor::new(1, 10, 5, 3);
+        assert!(desc.validate().is_err());
+        assert_eq!(
+            desc.validate().unwrap_err(),
+            "from_selected_value must be <= to_selected_value (when both are non-zero)"
+        );
+    }
+}

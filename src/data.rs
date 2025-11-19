@@ -129,8 +129,30 @@ pub struct Date {
 }
 
 impl Date {
+    /// Create a new Date with the specified values
+    ///
+    /// # Arguments
+    /// * `year` - Year (typically 1-9999, but u16 allows up to 65535)
+    /// * `month` - Month (1-12, or 0xFF for wildcard)
+    /// * `day_of_month` - Day of month (1-31, or 0xFF for wildcard)
+    /// * `day_of_week` - Day of week (1=Monday, 7=Sunday, or 0xFF for wildcard)
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::Date;
+    ///
+    /// // Create a specific date: 2024-12-25 (Wednesday)
+    /// let date = Date::new(2024, 12, 25, 3);
+    ///
+    /// // Create with wildcard day of week (auto-calculated)
+    /// let date = Date::new(2024, 12, 25, 0xFF);
+    /// ```
+    pub const fn new(year: u16, month: u8, day_of_month: u8, day_of_week: u8) -> Self {
+        Self { year, month, day_of_month, day_of_week }
+    }
+
     #[cfg(feature = "encode")]
-    /// Encode Date to 5 bytes: year_high, year_low, month, day_of_month, day_of_week
+    /// Encode Date to 5 bytes: year (2) + month + day_of_month + day_of_week
     /// Reference: Green Book Ed. 12, Section 4.1.6.1
     pub fn encode(&self) -> Vec<u8> {
         let mut buffer = Vec::with_capacity(5);
@@ -243,6 +265,33 @@ pub struct Time {
 }
 
 impl Time {
+    /// Create a new Time with the specified values
+    ///
+    /// # Arguments
+    /// * `hour` - Hour (0-23, or None for wildcard)
+    /// * `minute` - Minute (0-59, or None for wildcard)
+    /// * `second` - Second (0-59, or None for wildcard)
+    /// * `hundredth` - Hundredths of a second (0-99, or None for wildcard)
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::Time;
+    ///
+    /// // Create a specific time: 14:30:45.50
+    /// let time = Time::new(Some(14), Some(30), Some(45), Some(50));
+    ///
+    /// // Create with wildcard hundredths
+    /// let time = Time::new(Some(14), Some(30), Some(45), None);
+    /// ```
+    pub const fn new(
+        hour: Option<u8>,
+        minute: Option<u8>,
+        second: Option<u8>,
+        hundredth: Option<u8>,
+    ) -> Self {
+        Self { hour, minute, second, hundredth }
+    }
+
     #[cfg(feature = "encode")]
     /// Encode Time to 4 bytes: hour, minute, second, hundredth
     /// None values are encoded as 0xFF (wildcard per DLMS spec)
@@ -420,6 +469,36 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    /// Create a new DateTime with the specified values
+    ///
+    /// # Arguments
+    /// * `date` - Date component
+    /// * `time` - Time component
+    /// * `offset_minutes` - Timezone offset in minutes from UTC (positive = ahead of UTC, None for wildcard)
+    /// * `clock_status` - Clock status byte (see ClockStatus for bit definitions, None for wildcard)
+    ///
+    /// # Example
+    /// ```
+    /// use dlms_cosem::{DateTime, Date, Time};
+    ///
+    /// // Create a specific DateTime: 2024-12-25 14:30:00 UTC+2
+    /// let date = Date::new(2024, 12, 25, 3);  // Wednesday
+    /// let time = Time::new(Some(14), Some(30), Some(0), Some(0));
+    /// let datetime = DateTime::new(date, time, Some(120), Some(0x00));
+    /// ```
+    pub const fn new(
+        date: Date,
+        time: Time,
+        offset_minutes: Option<i16>,
+        clock_status: Option<u8>,
+    ) -> Self {
+        let clock_status_opt = match clock_status {
+            Some(cs) => Some(ClockStatus(cs)),
+            None => None,
+        };
+        Self { date, time, offset_minutes, clock_status: clock_status_opt }
+    }
+
     #[cfg(feature = "encode")]
     /// Encode DateTime to 12 bytes: date (5) + time (4) + offset (2) + clock_status (1)
     /// None offset is encoded as 0x8000 (wildcard per DLMS spec)
@@ -980,6 +1059,66 @@ impl Data {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Tests for new constructors
+    #[test]
+    fn test_date_new() {
+        let date = Date::new(2024, 12, 25, 3);
+        assert_eq!(date.year, 2024);
+        assert_eq!(date.month, 12);
+        assert_eq!(date.day_of_month, 25);
+        assert_eq!(date.day_of_week, 3);
+    }
+
+    #[test]
+    fn test_date_new_with_wildcard() {
+        let date = Date::new(2024, 12, 25, 0xFF);
+        assert_eq!(date.year, 2024);
+        assert_eq!(date.month, 12);
+        assert_eq!(date.day_of_month, 25);
+        assert_eq!(date.day_of_week, 0xFF);
+    }
+
+    #[test]
+    fn test_time_new() {
+        let time = Time::new(Some(14), Some(30), Some(45), Some(50));
+        assert_eq!(time.hour, Some(14));
+        assert_eq!(time.minute, Some(30));
+        assert_eq!(time.second, Some(45));
+        assert_eq!(time.hundredth, Some(50));
+    }
+
+    #[test]
+    fn test_time_new_with_wildcards() {
+        let time = Time::new(Some(14), Some(30), None, None);
+        assert_eq!(time.hour, Some(14));
+        assert_eq!(time.minute, Some(30));
+        assert_eq!(time.second, None);
+        assert_eq!(time.hundredth, None);
+    }
+
+    #[test]
+    fn test_datetime_new() {
+        let date = Date::new(2024, 12, 25, 3);
+        let time = Time::new(Some(14), Some(30), Some(0), Some(0));
+        let datetime = DateTime::new(date, time, Some(120), Some(0x00));
+
+        assert_eq!(datetime.date.year, 2024);
+        assert_eq!(datetime.date.month, 12);
+        assert_eq!(datetime.time.hour, Some(14));
+        assert_eq!(datetime.offset_minutes, Some(120));
+        assert_eq!(datetime.clock_status, Some(ClockStatus(0x00)));
+    }
+
+    #[test]
+    fn test_datetime_new_with_wildcards() {
+        let date = Date::new(2024, 12, 25, 3);
+        let time = Time::new(Some(14), Some(30), Some(0), Some(0));
+        let datetime = DateTime::new(date, time, None, None);
+
+        assert_eq!(datetime.offset_minutes, None);
+        assert_eq!(datetime.clock_status, None);
+    }
 
     // DataType tests
     #[test]

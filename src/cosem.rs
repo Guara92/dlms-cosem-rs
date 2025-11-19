@@ -82,6 +82,10 @@ pub mod extended_register;
 pub mod profile_generic;
 pub mod register;
 
+// Re-export commonly used types
+pub use crate::selective_access::CaptureObjectDefinition;
+pub use profile_generic::{ProfileGeneric, SortMethod};
+
 /// Core trait for all COSEM interface class objects.
 ///
 /// Every COSEM object must implement this trait to provide standardized access

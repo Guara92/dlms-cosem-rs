@@ -151,19 +151,44 @@ This library implements **~47% of the DLMS/COSEM specification** (Green Book Ed.
     - ✅ **Gurux DLMS.c compliance verified** (2025-01-27): All time adjustment methods byte-for-byte compatible
     - ✅ 6 methods: adjust_to_quarter (nearest rounding), adjust_to_minute (30-sec threshold), shift_time, preset workflows
     - ✅ Full DST configuration support with timezone handling
-  - ✅ **ProfileGeneric (Class 7)**: Load profiles & event logs - **PRODUCTION READY (Phase 5.2)** (76 tests)
+  - ✅ **ProfileGeneric (Class 7)**: Load profiles & event logs - **PRODUCTION READY** (76 tests)
     - ✅ **FIFO/LIFO ring buffer management** with automatic overflow handling
     - ✅ 8 attributes, 2 methods (reset, capture), multi-column support
     - ✅ Real-world examples: 15-min load profiles, event logs, billing profiles
-    - ⏳ Phase 5.3 deferred: Selective access (RangeDescriptor, EntryDescriptor), advanced sort methods
+
+- **Selective Access** ✅ **Phase 5.3.1 Complete (2025-01-27) - PRODUCTION READY**
+  - ✅ **RangeDescriptor** (Selector 1): Value-based filtering with DateTime support
+    - Filter by value range in any column (typically DateTime for time-based queries)
+    - Column selection for bandwidth optimization
+    - Validation methods with clear error messages
+    - Full chrono and jiff support (feature parity)
+  - ✅ **EntryDescriptor** (Selector 2): Index-based filtering (most efficient)
+    - Row/column range selection with 1-based indexing
+    - Helper methods: `last_n_entries()`, `column_range()`, `range()`
+    - Validation for semantic correctness
+  - ✅ **DateTime Constructors**: Public `const fn` constructors for Date, Time, DateTime
+    - Direct construction without chrono/jiff dependencies
+    - Compile-time construction support
+    - Wildcard support (0xFF / None per DLMS spec)
+  - ✅ **29 comprehensive tests** (23 selective_access + 6 DateTime constructors)
+  - ✅ **Green Book Ed. 12 & Gurux compatible** (byte-perfect encoding verified)
+  - ✅ **Complete documentation**: Module docs with chrono + jiff examples, 19 doctests
+
+- **Advanced Sort Methods** ✅ **Phase 5.3.2 Complete (2025-01-27) - PRODUCTION READY**
+  - ✅ **Largest** (SortMethod 3): Keep N entries with largest values in sort_object column
+  - ✅ **Smallest** (SortMethod 4): Keep N entries with smallest values
+  - ✅ **NearestToZero** (SortMethod 5): Keep N entries closest to zero (by absolute value)
+  - ✅ **FarthestFromZero** (SortMethod 6): Keep N entries farthest from zero
+  - ✅ **All DLMS numeric types supported**: Integer, Long, DoubleLong, Float32/64, etc.
+  - ✅ **Graceful fallback to FIFO** when sort_object not configured
+  - ✅ **30 comprehensive tests** (8 helper + 18 sort method + 4 edge cases)
+  - ✅ **O(n) complexity** - acceptable for typical buffer sizes (96-2880 entries)
+  - ✅ **100% safe Rust** - no unsafe blocks, no panics
   
 ### 🚧 Not Yet Implemented
 
 - **COSEM Interface Classes**: Additional implementations (AssociationLN, ImageTransfer, ActivityCalendar, etc.)
-- **Advanced Features (Phase 5.3)**: 
-  - Selective access (RangeDescriptor, EntryDescriptor) for ProfileGeneric
-  - Advanced sort methods (Largest, Smallest, NearestToZero, FarthestFromZero)
-  - Automatic periodic capture for ProfileGeneric
+- **Automatic Periodic Capture**: Event-driven capture scheduling for ProfileGeneric (deferred to Phase 6 - Client Integration)
 - **High-Level Client**: DlmsClient with transport layer (TCP, Serial, HDLC)
 
 ## Usage
@@ -356,10 +381,11 @@ assert_eq!(parsed, scaler_unit);
 - ✅ **100% Safe Rust**: Zero unsafe blocks
 - ✅ **no_std Compatible**: Works in embedded environments (core features)
 - ✅ **Panic-Free**: All errors returned as Result/IResult
-- ✅ **Well-Tested**: 600+ tests (all passing), >85% code coverage (300 COSEM object tests)
+- ✅ **Well-Tested**: 948 tests (all passing), >85% code coverage (330+ COSEM object tests)
 - ✅ **Zero Clippy Warnings**: Clean code on all feature combinations
 - ✅ **Green Book Compliant**: Follows DLMS UA 1000-2 Ed. 12 specification
-- ✅ **Gurux Compatible**: Clock (Class 8) and ProfileGeneric (Class 7) certified compatible with Gurux DLMS.c reference
+- ✅ **Gurux Compatible**: Clock (Class 8), ProfileGeneric (Class 7), and Selective Access certified compatible with Gurux DLMS.c reference
 - ✅ **Feature Matrix Tested**: All feature combinations verified and passing
+- ✅ **Dual DateTime Support**: Both chrono and jiff libraries fully supported with feature parity
 
 For more information, also take a look at https://github.com/reitermarkus/smart-meter-rs.

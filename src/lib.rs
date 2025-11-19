@@ -64,6 +64,7 @@ pub mod get;
 pub mod hdlc;
 #[cfg(feature = "mbusparse")]
 pub mod mbus;
+pub mod selective_access;
 pub mod set;
 
 #[cfg(test)]

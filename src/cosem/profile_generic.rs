@@ -31,13 +31,15 @@
 //! ## Example Usage
 //!
 //! ```rust
+//! extern crate alloc;
 //! use dlms_cosem::cosem::{ProfileGeneric, CaptureObjectDefinition, SortMethod};
-//! use dlms_cosem::types::{ObisCode, Data};
+//! use dlms_cosem::{ObisCode, Data};
+//! use alloc::collections::VecDeque;
 //!
 //! // Create a load profile for 15-minute energy data
 //! let profile = ProfileGeneric {
 //!     logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
-//!     buffer: Vec::new(),
+//!     buffer: VecDeque::new(),
 //!     capture_objects: vec![
 //!         // Column 1: Clock (timestamp)
 //!         CaptureObjectDefinition {
@@ -59,6 +61,7 @@
 //!     sort_object: None,
 //!     entries_in_use: 0,
 //!     profile_entries: 96, // 24 hours × 4 intervals/hour
+//!     executed_time: 0,
 //! };
 //! ```
 //!
@@ -78,63 +81,8 @@ use alloc::collections::VecDeque;
 #[cfg(feature = "std")]
 use std::collections::VecDeque;
 
-/// Capture object definition
-///
-/// Defines which COSEM object attribute to capture in the ProfileGeneric buffer.
-/// Each CaptureObjectDefinition represents one column in the buffer.
-///
-/// ## Encoding
-///
-/// Encoded as a Structure with 4 elements:
-/// - class_id: Unsigned(u16)
-/// - logical_name: OctetString(6)
-/// - attribute_index: Integer(i8)
-/// - data_index: LongUnsigned(u16)
-///
-/// ## Example
-///
-/// ```rust
-/// use dlms_cosem::cosem::CaptureObjectDefinition;
-/// use dlms_cosem::types::ObisCode;
-///
-/// // Capture Clock.time (Class 8, attribute 2)
-/// let clock_capture = CaptureObjectDefinition {
-///     class_id: 8,
-///     logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
-///     attribute_index: 2,
-///     data_index: 0, // Entire DateTime value
-/// };
-///
-/// // Capture first element of a Structure attribute
-/// let partial_capture = CaptureObjectDefinition {
-///     class_id: 3,
-///     logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
-///     attribute_index: 3,
-///     data_index: 1, // First element only
-/// };
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct CaptureObjectDefinition {
-    /// Class ID of the COSEM object to capture
-    pub class_id: u16,
-
-    /// Logical name (OBIS code) of the object
-    pub logical_name: ObisCode,
-
-    /// Attribute index to capture (1-based)
-    ///
-    /// Examples:
-    /// - 2: Register.value or Clock.time
-    /// - 3: Register.scaler_unit
-    pub attribute_index: i8,
-
-    /// Data index within compound attributes (0 = entire value)
-    ///
-    /// For simple attributes, use 0.
-    /// For Structure/Array attributes, use 1-based index to capture a specific element.
-    pub data_index: u16,
-}
+// Re-export CaptureObjectDefinition from selective_access for backward compatibility
+pub use crate::selective_access::CaptureObjectDefinition;
 
 /// Sort method for ProfileGeneric buffer
 ///
@@ -240,14 +188,17 @@ impl SortMethod {
 /// | 2  | capture | Integer    | Manually add entry    |
 ///
 /// ## Example: 15-Minute Load Profile
+/// ## Example
 ///
 /// ```rust
+/// extern crate alloc;
 /// use dlms_cosem::cosem::{ProfileGeneric, CaptureObjectDefinition, SortMethod};
-/// use dlms_cosem::types::ObisCode;
+/// use dlms_cosem::{ObisCode, Data};
+/// use alloc::collections::VecDeque;
 ///
 /// let profile = ProfileGeneric {
 ///     logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
-///     buffer: Vec::new(),
+///     buffer: VecDeque::new(),
 ///     capture_objects: vec![
 ///         CaptureObjectDefinition {
 ///             class_id: 8,
@@ -261,6 +212,7 @@ impl SortMethod {
 ///     sort_object: None,
 ///     entries_in_use: 0,
 ///     profile_entries: 96,
+///     executed_time: 0,
 /// };
 /// ```
 ///
@@ -539,7 +491,7 @@ impl ProfileGeneric {
     ///
     /// ```rust
     /// use dlms_cosem::cosem::ProfileGeneric;
-    /// use dlms_cosem::types::ObisCode;
+    /// use dlms_cosem::ObisCode;
     ///
     /// let profile = ProfileGeneric::new(
     ///     ObisCode::new(1, 0, 99, 1, 0, 255),
@@ -578,8 +530,9 @@ impl ProfileGeneric {
     /// ## Example
     ///
     /// ```rust
+    /// extern crate alloc;
     /// use dlms_cosem::cosem::{ProfileGeneric, CaptureObjectDefinition};
-    /// use dlms_cosem::types::ObisCode;
+    /// use dlms_cosem::ObisCode;
     ///
     /// let clock_def = CaptureObjectDefinition {
     ///     class_id: 8,
@@ -633,7 +586,7 @@ impl ProfileGeneric {
     ///
     /// ```rust
     /// use dlms_cosem::cosem::{ProfileGeneric, CaptureObjectDefinition, SortMethod};
-    /// use dlms_cosem::types::ObisCode;
+    /// use dlms_cosem::ObisCode;
     ///
     /// let clock_def = CaptureObjectDefinition {
     ///     class_id: 8,
@@ -686,13 +639,15 @@ impl ProfileGeneric {
     /// ## Example
     ///
     /// ```rust
+    /// extern crate alloc;
     /// use dlms_cosem::cosem::ProfileGeneric;
-    /// use dlms_cosem::types::Data;
+    /// use dlms_cosem::Data;
     /// # use dlms_cosem::cosem::{CosemObject, SortMethod};
-    /// # use dlms_cosem::types::ObisCode;
+    /// # use dlms_cosem::ObisCode;
+    /// # use alloc::collections::VecDeque;
     /// # let mut profile = ProfileGeneric {
     /// #     logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
-    /// #     buffer: vec![vec![Data::Integer(1)]],
+    /// #     buffer: VecDeque::from(vec![vec![Data::Integer(1)]]),
     /// #     capture_objects: vec![],
     /// #     capture_period: 0,
     /// #     sort_method: SortMethod::Fifo,
@@ -736,12 +691,14 @@ impl ProfileGeneric {
     /// ## Example
     ///
     /// ```rust
-    /// use dlms_cosem::cosem::{ProfileGeneric, CosemObject, CaptureObjectDefinition, SortMethod};
-    /// use dlms_cosem::types::{Data, ObisCode};
+    /// extern crate alloc;
+    /// # use dlms_cosem::cosem::{ProfileGeneric, CosemObject, CaptureObjectDefinition, SortMethod};
+    /// # use dlms_cosem::{Data, ObisCode};
+    /// # use alloc::collections::VecDeque;
     ///
     /// let mut profile = ProfileGeneric {
     ///     logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
-    ///     buffer: Vec::new(),
+    ///     buffer: VecDeque::new(),
     ///     capture_objects: vec![
     ///         CaptureObjectDefinition {
     ///             class_id: 8,
@@ -786,12 +743,15 @@ impl ProfileGeneric {
     ///
     /// - FIFO: Fully implemented with O(1) operations using VecDeque
     /// - LIFO: Fully implemented with O(1) operations using VecDeque
-    /// - Largest, Smallest, etc.: Default to FIFO (Phase 5.3)
+    ///
+    /// ## Phase 5.3.2 Implementation
+    ///
+    /// - Largest, Smallest, NearestToZero, FarthestFromZero: Fully implemented with O(n) operations
     ///
     /// ## Performance
     ///
-    /// - VecDeque provides O(1) push_back/push_front and pop_front/pop_back
-    /// - No O(n) `remove(0)` operations needed
+    /// - VecDeque provides O(1) push_back/push_front and pop_front/pop_back for FIFO/LIFO
+    /// - Sorted methods use O(n) linear search to find worst entry (acceptable for typical buffer sizes)
     fn add_entry(&mut self, entry: Vec<Data>) {
         match self.sort_method {
             SortMethod::Fifo => {
@@ -808,16 +768,166 @@ impl ProfileGeneric {
                     self.buffer.pop_back(); // Remove newest (last) - O(1)
                 }
             }
-            _ => {
-                // Phase 5.3: Implement Largest, Smallest, NearestToZero, FarthestFromZero
-                // For now, default to FIFO behavior
-                self.buffer.push_back(entry);
-                while self.buffer.len() > self.profile_entries as usize {
-                    self.buffer.pop_front(); // O(1)
-                }
+            SortMethod::Largest
+            | SortMethod::Smallest
+            | SortMethod::NearestToZero
+            | SortMethod::FarthestFromZero => {
+                // Phase 5.3.2: Value-based sorting
+                self.add_entry_sorted(entry);
             }
         }
         self.entries_in_use = self.buffer.len() as u32;
+    }
+
+    /// Add entry with value-based sorting (Phase 5.3.2)
+    ///
+    /// For Largest/Smallest/NearestToZero/FarthestFromZero sort methods,
+    /// this adds the entry and removes the worst entry if buffer is full.
+    ///
+    /// ## Complexity
+    ///
+    /// O(n) where n = buffer size (linear search for worst entry)
+    ///
+    /// ## Fallback Behavior
+    ///
+    /// If sort_object is not configured or column not found, falls back to FIFO.
+    fn add_entry_sorted(&mut self, entry: Vec<Data>) {
+        // Add the new entry
+        self.buffer.push_back(entry);
+
+        // If under capacity, we're done
+        if self.buffer.len() <= self.profile_entries as usize {
+            return;
+        }
+
+        // Find and remove the worst entry based on sort_method
+        if let Some(worst_idx) = self.find_worst_entry_index() {
+            self.buffer.remove(worst_idx);
+        } else {
+            // Fallback to FIFO if sort_object not configured or not found
+            self.buffer.pop_front();
+        }
+    }
+
+    /// Find the index of the worst entry to remove
+    ///
+    /// Returns the index of the entry that should be removed when buffer is full,
+    /// based on the current sort_method.
+    ///
+    /// ## Returns
+    ///
+    /// - Some(index) - Index of the worst entry
+    /// - None - If no numeric values found or sort_object not configured
+    fn find_worst_entry_index(&self) -> Option<usize> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+
+        // Extract all values with their indices
+        let indexed_values: Vec<(usize, f64)> = self
+            .buffer
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| self.extract_sort_value(entry).map(|val| (idx, val)))
+            .collect();
+
+        if indexed_values.is_empty() {
+            return None; // No numeric values found
+        }
+
+        // Find the worst entry based on sort method
+        let worst = match self.sort_method {
+            SortMethod::Largest => {
+                // Worst = smallest value
+                indexed_values
+                    .iter()
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal))
+            }
+            SortMethod::Smallest => {
+                // Worst = largest value
+                indexed_values
+                    .iter()
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal))
+            }
+            SortMethod::NearestToZero => {
+                // Worst = farthest from zero
+                indexed_values.iter().max_by(|a, b| {
+                    a.1.abs().partial_cmp(&b.1.abs()).unwrap_or(core::cmp::Ordering::Equal)
+                })
+            }
+            SortMethod::FarthestFromZero => {
+                // Worst = nearest to zero
+                indexed_values.iter().min_by(|a, b| {
+                    a.1.abs().partial_cmp(&b.1.abs()).unwrap_or(core::cmp::Ordering::Equal)
+                })
+            }
+            _ => return None,
+        };
+
+        worst.map(|(idx, _)| *idx)
+    }
+
+    /// Extract the numeric value from the sort_object column of an entry
+    ///
+    /// ## Returns
+    ///
+    /// - Some(value) - The numeric value from the sort column
+    /// - None - If sort_object not configured, column not found, or value not numeric
+    fn extract_sort_value(&self, entry: &[Data]) -> Option<f64> {
+        let column_idx = self.find_sort_column_index()?;
+
+        if column_idx >= entry.len() {
+            return None; // Column index out of bounds
+        }
+
+        extract_numeric_value(&entry[column_idx])
+    }
+
+    /// Find the index of the sort_object column in capture_objects
+    ///
+    /// ## Returns
+    ///
+    /// - Some(index) - The column index
+    /// - None - If sort_object is None or not found in capture_objects
+    fn find_sort_column_index(&self) -> Option<usize> {
+        let sort_obj = self.sort_object.as_ref()?;
+
+        self.capture_objects.iter().position(|obj| obj == sort_obj)
+    }
+}
+
+/// Extract numeric value from Data for comparison
+///
+/// Supports all DLMS numeric types and converts to f64 for uniform comparison.
+///
+/// ## Returns
+///
+/// - Some(value) - For all numeric types (Integer, LongUnsigned, Float64, etc.)
+/// - None - For non-numeric types (OctetString, DateTime, etc.)
+///
+/// ## Example
+///
+/// ```rust
+/// # use dlms_cosem::Data;
+/// # use dlms_cosem::cosem::profile_generic::extract_numeric_value;
+/// assert_eq!(extract_numeric_value(&Data::Integer(42)), Some(42.0));
+/// assert_eq!(extract_numeric_value(&Data::Float64(3.14)), Some(3.14));
+/// assert_eq!(extract_numeric_value(&Data::OctetString(vec![1, 2])), None);
+/// ```
+pub fn extract_numeric_value(data: &Data) -> Option<f64> {
+    match data {
+        Data::Integer(v) => Some(*v as f64),
+        Data::Unsigned(v) => Some(*v as f64),
+        Data::Long(v) => Some(*v as f64),
+        Data::LongUnsigned(v) => Some(*v as f64),
+        Data::DoubleLong(v) => Some(*v as f64),
+        Data::DoubleLongUnsigned(v) => Some(*v as f64),
+        Data::Long64(v) => Some(*v as f64),
+        Data::Long64Unsigned(v) => Some(*v as f64),
+        Data::Float32(v) => Some(*v as f64),
+        Data::Float64(v) => Some(*v),
+        // Non-numeric types return None
+        _ => None,
     }
 }
 
@@ -2039,45 +2149,898 @@ mod tests {
         assert_eq!(profile.buffer.len(), 3); // Placeholder assertion
     }
 
+    // ===== PHASE 5.3.2: Advanced Sort Methods Tests =====
+
+    // ----- Helper Function Tests (8 tests) -----
+
     #[test]
-    fn test_sort_method_largest_placeholder() {
-        // Phase 5.3: Largest sort method (sort by largest value in sort_object column)
-        let mut profile = ProfileGeneric::new(ObisCode::new(1, 0, 99, 1, 0, 255), 10);
-        profile.sort_method = SortMethod::Largest;
-        profile.sort_object = Some(CaptureObjectDefinition {
+    fn test_extract_numeric_value_integer() {
+        assert_eq!(extract_numeric_value(&Data::Integer(42)), Some(42.0));
+        assert_eq!(extract_numeric_value(&Data::Integer(-10)), Some(-10.0));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_unsigned() {
+        assert_eq!(extract_numeric_value(&Data::Unsigned(255)), Some(255.0));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_long() {
+        assert_eq!(extract_numeric_value(&Data::Long(1000)), Some(1000.0));
+        assert_eq!(extract_numeric_value(&Data::Long(-500)), Some(-500.0));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_long_unsigned() {
+        assert_eq!(extract_numeric_value(&Data::LongUnsigned(65000)), Some(65000.0));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_double_long() {
+        assert_eq!(extract_numeric_value(&Data::DoubleLong(1_000_000)), Some(1_000_000.0));
+        assert_eq!(extract_numeric_value(&Data::DoubleLong(-500_000)), Some(-500_000.0));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_double_long_unsigned() {
+        assert_eq!(
+            extract_numeric_value(&Data::DoubleLongUnsigned(4_000_000_000)),
+            Some(4_000_000_000.0)
+        );
+    }
+
+    #[test]
+    fn test_extract_numeric_value_float() {
+        // Float32 has precision loss when converting to f64
+        let result = extract_numeric_value(&Data::Float32(3.5));
+        assert!(result.is_some());
+        let value = result.unwrap();
+        assert!((value - 3.5).abs() < 0.01); // Use tolerance for Float32
+
+        assert_eq!(extract_numeric_value(&Data::Float64(2.75)), Some(2.75));
+    }
+
+    #[test]
+    fn test_extract_numeric_value_non_numeric() {
+        assert_eq!(extract_numeric_value(&Data::OctetString(vec![1, 2, 3])), None);
+        assert_eq!(extract_numeric_value(&Data::Null), None);
+        assert_eq!(extract_numeric_value(&Data::Utf8String("123".to_string())), None);
+    }
+
+    // ----- Largest Sort Method Tests (5 tests) -----
+
+    #[test]
+    fn test_largest_sort_basic() {
+        let clock_def = CaptureObjectDefinition {
+            class_id: 8,
+            logical_name: ObisCode::new(0, 0, 1, 0, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+        let energy_def = CaptureObjectDefinition {
             class_id: 3,
             logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
             attribute_index: 2,
             data_index: 0,
-        });
-        // TODO Phase 5.3: Implement Largest sorting
-        // Currently defaults to FIFO behavior
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![clock_def.clone(), energy_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(energy_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Add entries - buffer size = 3, keep 3 largest
+        profile.add_entry(vec![Data::Integer(1), Data::DoubleLongUnsigned(100)]);
+        profile.add_entry(vec![Data::Integer(2), Data::DoubleLongUnsigned(300)]);
+        profile.add_entry(vec![Data::Integer(3), Data::DoubleLongUnsigned(200)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+
+        // Add 4th entry (500) - should remove smallest (100)
+        profile.add_entry(vec![Data::Integer(4), Data::DoubleLongUnsigned(500)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Buffer should contain: 500, 300, 200 (not necessarily in this order)
+        let values: Vec<u32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLongUnsigned(v) = entry[1] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&500));
+        assert!(values.contains(&300));
+        assert!(values.contains(&200));
+        assert!(!values.contains(&100)); // Smallest removed
+    }
+
+    #[test]
+    fn test_largest_sort_negative_values() {
+        let energy_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![energy_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(energy_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Test with negative values: -10, -5, -20, -3
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+        profile.add_entry(vec![Data::DoubleLong(-20)]);
+        profile.add_entry(vec![Data::DoubleLong(-3)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep largest (least negative): -3, -5, -10
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&-3));
+        assert!(values.contains(&-5));
+        assert!(values.contains(&-10));
+        assert!(!values.contains(&-20)); // Smallest removed
+    }
+
+    #[test]
+    fn test_largest_sort_mixed_types() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Mix different numeric types
+        profile.add_entry(vec![Data::Integer(50)]);
+        profile.add_entry(vec![Data::LongUnsigned(1000)]);
+        profile.add_entry(vec![Data::Float64(250.5)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep largest: 1000, 250.5, 100
+        // Remove: 50
+    }
+
+    #[test]
+    fn test_largest_sort_single_entry() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 1,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::Integer(10)]);
+        assert_eq!(profile.buffer.len(), 1);
+
+        profile.add_entry(vec![Data::Integer(20)]);
+        assert_eq!(profile.buffer.len(), 1);
+        assert_eq!(profile.buffer[0][0], Data::Integer(20)); // Keep largest
+    }
+
+    #[test]
+    fn test_largest_sort_overflow() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 5,
+            executed_time: 0,
+        };
+
+        // Add 10 entries to buffer of size 5
+        for i in 1..=10 {
+            profile.add_entry(vec![Data::Integer(i * 10)]);
+        }
+
+        assert_eq!(profile.buffer.len(), 5);
+        // Should keep: 100, 90, 80, 70, 60
+        let values: Vec<i8> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::Integer(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&100));
+        assert!(values.contains(&90));
+        assert!(values.contains(&80));
+        assert!(values.contains(&70));
+        assert!(values.contains(&60));
+    }
+
+    // ----- Smallest Sort Method Tests (5 tests) -----
+
+    #[test]
+    fn test_smallest_sort_basic() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Smallest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
         profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
         profile.add_entry(vec![Data::DoubleLongUnsigned(300)]);
         profile.add_entry(vec![Data::DoubleLongUnsigned(200)]);
-        // With Largest sort, buffer should be [300, 200, 100]
-        // Currently: [100, 300, 200] (FIFO)
+        profile.add_entry(vec![Data::DoubleLongUnsigned(50)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep smallest: 50, 100, 200
+        let values: Vec<u32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLongUnsigned(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&50));
+        assert!(values.contains(&100));
+        assert!(values.contains(&200));
+        assert!(!values.contains(&300)); // Largest removed
+    }
+
+    #[test]
+    fn test_smallest_sort_negative_values() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Smallest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Test with negative values
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+        profile.add_entry(vec![Data::DoubleLong(-20)]);
+        profile.add_entry(vec![Data::DoubleLong(-3)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep smallest (most negative): -20, -10, -5
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&-20));
+        assert!(values.contains(&-10));
+        assert!(values.contains(&-5));
+        assert!(!values.contains(&-3)); // Largest removed
+    }
+
+    #[test]
+    fn test_smallest_sort_mixed_types() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Smallest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::Integer(50)]);
+        profile.add_entry(vec![Data::LongUnsigned(1000)]);
+        profile.add_entry(vec![Data::Float64(25.5)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep smallest: 25.5, 50, 100
+    }
+
+    #[test]
+    fn test_smallest_sort_single_entry() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Smallest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 1,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::Integer(20)]);
+        assert_eq!(profile.buffer.len(), 1);
+
+        profile.add_entry(vec![Data::Integer(10)]);
+        assert_eq!(profile.buffer.len(), 1);
+        assert_eq!(profile.buffer[0][0], Data::Integer(10)); // Keep smallest
+    }
+
+    #[test]
+    fn test_smallest_sort_overflow() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Smallest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 5,
+            executed_time: 0,
+        };
+
+        // Add 10 entries to buffer of size 5
+        for i in 1..=10 {
+            profile.add_entry(vec![Data::Integer(i * 10)]);
+        }
+
+        assert_eq!(profile.buffer.len(), 5);
+        // Should keep: 10, 20, 30, 40, 50
+        let values: Vec<i8> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::Integer(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&10));
+        assert!(values.contains(&20));
+        assert!(values.contains(&30));
+        assert!(values.contains(&40));
+        assert!(values.contains(&50));
+    }
+
+    // ----- NearestToZero Sort Method Tests (4 tests) -----
+
+    #[test]
+    fn test_nearest_to_zero_basic() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::NearestToZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Values: -10, -5, 3, 8, 1
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+        profile.add_entry(vec![Data::DoubleLong(3)]);
+        profile.add_entry(vec![Data::DoubleLong(8)]);
+        profile.add_entry(vec![Data::DoubleLong(1)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep nearest to zero: 1, 3, -5
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&1));
+        assert!(values.contains(&3));
+        assert!(values.contains(&-5));
+        // -10 and 8 removed (farthest from zero)
+    }
+
+    #[test]
+    fn test_nearest_to_zero_positive_only() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::NearestToZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(10)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(50)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(5)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep: 5, 10, 50
+        let values: Vec<u32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLongUnsigned(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&5));
+        assert!(values.contains(&10));
+        assert!(values.contains(&50));
+    }
+
+    #[test]
+    fn test_nearest_to_zero_negative_only() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::NearestToZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLong(-100)]);
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-50)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep: -5, -10, -50
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&-5));
+        assert!(values.contains(&-10));
+        assert!(values.contains(&-50));
+    }
+
+    #[test]
+    fn test_nearest_to_zero_mixed_signs() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::NearestToZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 4,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLong(50)]);
+        profile.add_entry(vec![Data::DoubleLong(-30)]);
+        profile.add_entry(vec![Data::DoubleLong(20)]);
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(5)]);
+
+        assert_eq!(profile.buffer.len(), 4);
+        // Keep: 5, -10, 20, -30 (abs values: 5, 10, 20, 30)
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&5));
+        assert!(values.contains(&-10));
+        assert!(values.contains(&20));
+        assert!(values.contains(&-30));
+        assert!(!values.contains(&50)); // Farthest removed
+    }
+
+    // ----- FarthestFromZero Sort Method Tests (4 tests) -----
+
+    #[test]
+    fn test_farthest_from_zero_basic() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::FarthestFromZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Values: -10, -5, 3, 8, 1
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+        profile.add_entry(vec![Data::DoubleLong(3)]);
+        profile.add_entry(vec![Data::DoubleLong(8)]);
+        profile.add_entry(vec![Data::DoubleLong(1)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep farthest from zero: -10, 8, -5
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&-10));
+        assert!(values.contains(&8));
+        assert!(values.contains(&-5));
+        // 1 and 3 removed (nearest to zero)
+    }
+
+    #[test]
+    fn test_farthest_from_zero_positive_only() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::FarthestFromZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(10)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(50)]);
+        profile.add_entry(vec![Data::DoubleLongUnsigned(5)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep: 100, 50, 10
+        let values: Vec<u32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLongUnsigned(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&100));
+        assert!(values.contains(&50));
+        assert!(values.contains(&10));
+    }
+
+    #[test]
+    fn test_farthest_from_zero_negative_only() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::FarthestFromZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLong(-100)]);
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(-50)]);
+        profile.add_entry(vec![Data::DoubleLong(-5)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // Keep: -100, -50, -10
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&-100));
+        assert!(values.contains(&-50));
+        assert!(values.contains(&-10));
+    }
+
+    #[test]
+    fn test_farthest_from_zero_mixed_signs() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::FarthestFromZero,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 4,
+            executed_time: 0,
+        };
+
+        profile.add_entry(vec![Data::DoubleLong(50)]);
+        profile.add_entry(vec![Data::DoubleLong(-30)]);
+        profile.add_entry(vec![Data::DoubleLong(20)]);
+        profile.add_entry(vec![Data::DoubleLong(-10)]);
+        profile.add_entry(vec![Data::DoubleLong(5)]);
+
+        assert_eq!(profile.buffer.len(), 4);
+        // Keep: 50, -30, 20, -10 (abs values: 50, 30, 20, 10)
+        let values: Vec<i32> = profile
+            .buffer
+            .iter()
+            .map(|entry| if let Data::DoubleLong(v) = entry[0] { v } else { 0 })
+            .collect();
+
+        assert!(values.contains(&50));
+        assert!(values.contains(&-30));
+        assert!(values.contains(&20));
+        assert!(values.contains(&-10));
+        assert!(!values.contains(&5)); // Nearest removed
+    }
+
+    // ----- Edge Cases Tests (4 tests) -----
+
+    #[test]
+    fn test_sorted_method_no_sort_object() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: None, // No sort_object configured
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Should fallback to FIFO
+        profile.add_entry(vec![Data::Integer(1)]);
+        profile.add_entry(vec![Data::Integer(2)]);
+        profile.add_entry(vec![Data::Integer(3)]);
+        profile.add_entry(vec![Data::Integer(4)]);
+
+        assert_eq!(profile.buffer.len(), 3);
+        // FIFO: keep 2, 3, 4 (remove 1)
+        assert_eq!(profile.buffer[0][0], Data::Integer(2));
+        assert_eq!(profile.buffer[1][0], Data::Integer(3));
+        assert_eq!(profile.buffer[2][0], Data::Integer(4));
+    }
+
+    #[test]
+    fn test_sorted_method_column_not_found() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let different_def = CaptureObjectDefinition {
+            class_id: 4,
+            logical_name: ObisCode::new(1, 0, 2, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(different_def), // Not in capture_objects
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Should fallback to FIFO
+        profile.add_entry(vec![Data::Integer(1)]);
+        profile.add_entry(vec![Data::Integer(2)]);
+        profile.add_entry(vec![Data::Integer(3)]);
+        profile.add_entry(vec![Data::Integer(4)]);
+
         assert_eq!(profile.buffer.len(), 3);
     }
 
     #[test]
-    fn test_sort_method_smallest_placeholder() {
-        // Phase 5.3: Smallest sort method
-        let mut profile = ProfileGeneric::new(ObisCode::new(1, 0, 99, 1, 0, 255), 10);
-        profile.sort_method = SortMethod::Smallest;
-        profile.sort_object = Some(CaptureObjectDefinition {
+    fn test_sorted_method_non_numeric_values() {
+        let value_def = CaptureObjectDefinition {
             class_id: 3,
             logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
             attribute_index: 2,
             data_index: 0,
-        });
-        // TODO Phase 5.3: Implement Smallest sorting
-        profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
-        profile.add_entry(vec![Data::DoubleLongUnsigned(300)]);
-        profile.add_entry(vec![Data::DoubleLongUnsigned(200)]);
-        // With Smallest sort, buffer should be [100, 200, 300]
-        // Currently: [100, 300, 200] (FIFO)
+        };
+
+        let mut profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Add non-numeric values - should fallback to FIFO
+        profile.add_entry(vec![Data::OctetString(vec![1, 2, 3])]);
+        profile.add_entry(vec![Data::OctetString(vec![4, 5, 6])]);
+        profile.add_entry(vec![Data::OctetString(vec![7, 8, 9])]);
+        profile.add_entry(vec![Data::OctetString(vec![10, 11, 12])]);
+
         assert_eq!(profile.buffer.len(), 3);
+    }
+
+    #[test]
+    fn test_sorted_method_empty_buffer() {
+        let value_def = CaptureObjectDefinition {
+            class_id: 3,
+            logical_name: ObisCode::new(1, 0, 1, 8, 0, 255),
+            attribute_index: 2,
+            data_index: 0,
+        };
+
+        let profile = ProfileGeneric {
+            logical_name: ObisCode::new(1, 0, 99, 1, 0, 255),
+            buffer: VecDeque::new(),
+            capture_objects: vec![value_def.clone()],
+            capture_period: 0,
+            sort_method: SortMethod::Largest,
+            sort_object: Some(value_def),
+            entries_in_use: 0,
+            profile_entries: 3,
+            executed_time: 0,
+        };
+
+        // Empty buffer - should handle gracefully
+        assert_eq!(profile.buffer.len(), 0);
+        assert_eq!(profile.find_worst_entry_index(), None);
     }
 
     #[test]
