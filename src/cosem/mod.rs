@@ -75,8 +75,11 @@ use crate::action::ActionResult;
 use crate::get::DataAccessResult;
 use crate::{Data, ObisCode};
 
+pub mod clock;
 pub mod data;
+pub mod demand_register;
 pub mod extended_register;
+pub mod profile_generic;
 pub mod register;
 
 /// Core trait for all COSEM interface class objects.

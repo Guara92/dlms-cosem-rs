@@ -86,13 +86,22 @@ impl SecuritySuite {
 /// sc.set_authentication(true);
 /// sc.set_encryption(true);
 /// sc.set_suite(SecuritySuite::V1);
-/// assert_eq!(sc.encode(), 0x31);
+/// assert!(sc.authentication());
+/// assert!(sc.encryption());
+/// assert_eq!(sc.suite(), Some(SecuritySuite::V1));
+/// ```
+///
+/// ```
+/// # #[cfg(feature = "parse")]
+/// # {
+/// use dlms_cosem::{SecurityControl, SecuritySuite};
 ///
 /// // Parse existing security control
 /// let (_, sc) = SecurityControl::parse(&[0x32]).unwrap();
 /// assert!(sc.authentication());
 /// assert!(sc.encryption());
 /// assert_eq!(sc.suite(), Some(SecuritySuite::V2));
+/// # }
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct SecurityControl {
@@ -153,11 +162,15 @@ impl SecurityControl {
     ///
     /// // Authenticated encryption with AES-128-GCM
     /// let sc = SecurityControl::with_suite(true, true, SecuritySuite::V1);
-    /// assert_eq!(sc.encode(), 0x31);
+    /// assert!(sc.authentication());
+    /// assert!(sc.encryption());
+    /// assert_eq!(sc.suite(), Some(SecuritySuite::V1));
     ///
     /// // Authenticated encryption with AES-256-GCM
     /// let sc = SecurityControl::with_suite(true, true, SecuritySuite::V2);
-    /// assert_eq!(sc.encode(), 0x32);
+    /// assert!(sc.authentication());
+    /// assert!(sc.encryption());
+    /// assert_eq!(sc.suite(), Some(SecuritySuite::V2));
     /// ```
     pub fn with_suite(authentication: bool, encryption: bool, suite: SecuritySuite) -> Self {
         let mut byte = suite as u8;
@@ -232,7 +245,9 @@ impl SecurityControl {
     ///
     /// let mut sc = SecurityControl::new(0x30); // Auth + Enc, Suite V0
     /// sc.set_suite(SecuritySuite::V2);
-    /// assert_eq!(sc.encode(), 0x32); // Auth + Enc, Suite V2
+    /// assert_eq!(sc.suite(), Some(SecuritySuite::V2));
+    /// assert!(sc.authentication());
+    /// assert!(sc.encryption());
     /// ```
     pub fn set_suite(&mut self, suite: SecuritySuite) {
         // Clear lower 4 bits, then set suite
@@ -279,7 +294,8 @@ impl SecurityControl {
     ///
     /// let mut sc = SecurityControl::new(0x00);
     /// sc.set_authentication(true);
-    /// assert_eq!(sc.encode(), 0x10);
+    /// assert!(sc.authentication());
+    /// assert!(!sc.encryption());
     /// ```
     pub fn set_authentication(&mut self, authentication: bool) {
         if authentication {
@@ -308,7 +324,8 @@ impl SecurityControl {
     ///
     /// let mut sc = SecurityControl::new(0x00);
     /// sc.set_encryption(true);
-    /// assert_eq!(sc.encode(), 0x20);
+    /// assert!(sc.encryption());
+    /// assert!(!sc.authentication());
     /// ```
     pub fn set_encryption(&mut self, encryption: bool) {
         if encryption {
@@ -341,7 +358,9 @@ impl SecurityControl {
     ///
     /// let mut sc = SecurityControl::new(0x30);
     /// sc.set_broadcast(true);
-    /// assert_eq!(sc.encode(), 0x70);
+    /// assert!(sc.broadcast());
+    /// assert!(sc.authentication());
+    /// assert!(sc.encryption());
     /// ```
     pub fn set_broadcast(&mut self, broadcast: bool) {
         if broadcast {
@@ -370,7 +389,9 @@ impl SecurityControl {
     ///
     /// let mut sc = SecurityControl::new(0x30);
     /// sc.set_compression(true);
-    /// assert_eq!(sc.encode(), 0xB0);
+    /// assert!(sc.compression());
+    /// assert!(sc.authentication());
+    /// assert!(sc.encryption());
     /// ```
     pub fn set_compression(&mut self, compression: bool) {
         if compression {

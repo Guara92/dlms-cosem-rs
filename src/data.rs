@@ -95,7 +95,7 @@ impl DataType {
     ///
     /// # Example
     /// ```
-    /// use dlms_cosem::data::DataType;
+    /// use dlms_cosem::DataType;
     ///
     /// assert!(DataType::Integer.is_numeric());
     /// assert!(DataType::DoubleLongUnsigned.is_numeric());
