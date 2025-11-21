@@ -45,8 +45,15 @@ pub mod sync;
 pub mod r#async;
 
 // Re-export commonly used types for convenience
-#[cfg(feature = "client")]
-pub use sync::{ClientError, DlmsClient};
 
+// Common types (available with either client or async-client)
+#[cfg(any(feature = "client", feature = "async-client"))]
+pub use sync::{ClientSettings, SessionState};
+
+// Sync client types
+#[cfg(feature = "client")]
+pub use sync::{Buffer, ClientBuilder, ClientError, DlmsClient, DlmsSession};
+
+// Async client types
 #[cfg(feature = "async-client")]
-pub use r#async::{AsyncClientError, AsyncDlmsClient};
+pub use r#async::{AsyncClientBuilder, AsyncClientError, AsyncDlmsClient};

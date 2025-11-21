@@ -1,19 +1,16 @@
-//! RLRQ APDU (A-Release Request)
+//! RLRE APDU (A-Release Response)
 //!
-//! This module implements encoding and parsing of RLRQ APDUs used to
-//! gracefully release (disconnect) an application association with a DLMS/COSEM server.
+//! This module implements encoding and parsing of RLRE APDUs used to
+//! acknowledge the graceful release (disconnection) of an application association.
 //!
-//! Reference: DLMS Green Book Ed. 12, Section 11 and Table 146
+//! Reference: DLMS Green Book Ed. 12, Section 11 and Table 147
 
 use alloc::vec::Vec;
 use core::fmt;
 
-use super::ReleaseRequestReason;
+use super::ReleaseResponseReason;
 
-#[cfg(feature = "encode")]
-use alloc::vec;
-
-#[cfg(feature = "encode")]
+#[cfg(any(feature = "encode", feature = "parse"))]
 use super::ber::TagType;
 
 #[cfg(feature = "encode")]
@@ -28,39 +25,39 @@ use nom::{
 #[cfg(feature = "parse")]
 use super::ber::{TagClass, parse_length, parse_octet_string, parse_tag};
 
-/// RLRQ APDU (A-Release Request) - Tag 0x62
+/// RLRE APDU (A-Release Response) - Tag 0x63
 ///
-/// Sent by the client to gracefully release an application association.
-/// Uses ASN.1 BER encoding with APPLICATION class tag 2.
+/// Sent by the server to acknowledge a release request.
+/// Uses ASN.1 BER encoding with APPLICATION class tag 3.
 ///
-/// Reference: Green Book Table 146
+/// Reference: Green Book Table 147
 #[derive(Debug, Clone, PartialEq)]
-pub struct RlrqApdu {
-    /// Reason for release request - optional
-    pub reason: Option<ReleaseRequestReason>,
+pub struct RlreApdu {
+    /// Reason for release response - optional
+    pub reason: Option<ReleaseResponseReason>,
     /// User information (can carry xDLMS APDUs when ciphering is used) - optional
     pub user_information: Option<Vec<u8>>,
 }
 
-impl RlrqApdu {
-    /// Create a new RLRQ APDU with default values (normal release, no user info)
+impl RlreApdu {
+    /// Create a new RLRE APDU with default values (normal release, no user info)
     pub fn new() -> Self {
-        Self { reason: Some(ReleaseRequestReason::Normal), user_information: None }
+        Self { reason: Some(ReleaseResponseReason::Normal), user_information: None }
     }
 
-    /// Create RLRQ with a specific reason
-    pub fn with_reason(reason: ReleaseRequestReason) -> Self {
+    /// Create RLRE with a specific reason
+    pub fn with_reason(reason: ReleaseResponseReason) -> Self {
         Self { reason: Some(reason), user_information: None }
     }
 
-    /// Create RLRQ with user information (for ciphered communication)
+    /// Create RLRE with user information (for ciphered communication)
     pub fn with_user_info(user_info: Vec<u8>) -> Self {
-        Self { reason: Some(ReleaseRequestReason::Normal), user_information: Some(user_info) }
+        Self { reason: Some(ReleaseResponseReason::Normal), user_information: Some(user_info) }
     }
 
-    /// Encode RLRQ APDU to bytes
+    /// Encode RLRE APDU to bytes
     ///
-    /// Returns BER-encoded APDU with APPLICATION tag 2 (0x62)
+    /// Returns BER-encoded APDU with APPLICATION tag 3 (0x63)
     #[cfg(feature = "encode")]
     pub fn encode(&self) -> Vec<u8> {
         let mut content = Vec::new();
@@ -86,18 +83,18 @@ impl RlrqApdu {
             ));
         }
 
-        // Wrap in APPLICATION tag 2 (0x62)
-        encode_application(2, TagType::Constructed, &content)
+        // Wrap in APPLICATION tag 3 (0x63)
+        encode_application(3, TagType::Constructed, &content)
     }
 
-    /// Parse RLRQ APDU from bytes
+    /// Parse RLRE APDU from bytes
     ///
-    /// Expects BER-encoded APDU starting with APPLICATION tag 2 (0x62)
+    /// Expects BER-encoded APDU starting with APPLICATION tag 3 (0x63)
     #[cfg(feature = "parse")]
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        // Parse APPLICATION tag 2 (0x62)
+        // Parse APPLICATION tag 3 (0x63)
         let (input, (tag_class, _tag_type, tag_number)) = parse_tag(input)?;
-        if tag_class != TagClass::Application || tag_number != 2 {
+        if tag_class != TagClass::Application || tag_number != 3 {
             return Err(nom::Err::Error(Error::new(input, ErrorKind::Tag)));
         }
 
@@ -119,7 +116,7 @@ impl RlrqApdu {
                         return Err(nom::Err::Error(Error::new(rest, ErrorKind::LengthValue)));
                     }
                     let (rest, reason_byte) = nom::number::streaming::u8(rest)?;
-                    reason = ReleaseRequestReason::from_u8(reason_byte);
+                    reason = ReleaseResponseReason::from_u8(reason_byte);
                     remaining = rest;
                 }
                 // Context-specific tag 30 - user_information
@@ -144,15 +141,15 @@ impl RlrqApdu {
     }
 }
 
-impl Default for RlrqApdu {
+impl Default for RlreApdu {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl fmt::Display for RlrqApdu {
+impl fmt::Display for RlreApdu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "RLRQ(")?;
+        write!(f, "RLRE(")?;
         if let Some(reason) = self.reason {
             write!(f, "reason={}", reason)?;
         }
@@ -168,48 +165,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rlrq_new() {
-        let rlrq = RlrqApdu::new();
-        assert_eq!(rlrq.reason, Some(ReleaseRequestReason::Normal));
-        assert_eq!(rlrq.user_information, None);
+    fn test_rlre_new() {
+        let rlre = RlreApdu::new();
+        assert_eq!(rlre.reason, Some(ReleaseResponseReason::Normal));
+        assert_eq!(rlre.user_information, None);
     }
 
     #[test]
-    fn test_rlrq_with_reason() {
-        let rlrq = RlrqApdu::with_reason(ReleaseRequestReason::NotFinished);
-        assert_eq!(rlrq.reason, Some(ReleaseRequestReason::NotFinished));
-        assert_eq!(rlrq.user_information, None);
+    fn test_rlre_with_reason() {
+        let rlre = RlreApdu::with_reason(ReleaseResponseReason::NotFinished);
+        assert_eq!(rlre.reason, Some(ReleaseResponseReason::NotFinished));
+        assert_eq!(rlre.user_information, None);
     }
 
     #[test]
-    fn test_rlrq_with_user_info() {
+    fn test_rlre_with_user_info() {
         let user_info = vec![0x01, 0x02, 0x03];
-        let rlrq = RlrqApdu::with_user_info(user_info.clone());
-        assert_eq!(rlrq.reason, Some(ReleaseRequestReason::Normal));
-        assert_eq!(rlrq.user_information, Some(user_info));
+        let rlre = RlreApdu::with_user_info(user_info.clone());
+        assert_eq!(rlre.reason, Some(ReleaseResponseReason::Normal));
+        assert_eq!(rlre.user_information, Some(user_info));
     }
 
     #[test]
-    fn test_rlrq_display() {
-        let rlrq = RlrqApdu::new();
-        let display = format!("{}", rlrq);
-        assert!(display.contains("RLRQ"));
+    fn test_rlre_display() {
+        let rlre = RlreApdu::new();
+        let display = format!("{}", rlre);
+        assert!(display.contains("RLRE"));
         assert!(display.contains("Normal"));
     }
 
     #[cfg(feature = "encode")]
     #[test]
-    fn test_rlrq_encode_minimal() {
-        // Minimal RLRQ with only normal reason
-        let rlrq = RlrqApdu::new();
-        let bytes = rlrq.encode();
+    fn test_rlre_encode_minimal() {
+        // Minimal RLRE with only normal reason
+        let rlre = RlreApdu::new();
+        let bytes = rlre.encode();
 
         // Expected structure:
-        // [0x62] - APPLICATION tag 2 (constructed)
+        // [0x63] - APPLICATION tag 3 (constructed)
         // [length]
         // [0x80][0x01][0x00] - context tag 0, length 1, reason=0 (Normal)
 
-        assert_eq!(bytes[0], 0x62); // APPLICATION tag 2
+        assert_eq!(bytes[0], 0x63); // APPLICATION tag 3
         assert!(bytes.len() >= 4); // At least tag + length + reason tag/len/value
 
         // Verify reason is encoded
@@ -219,23 +216,23 @@ mod tests {
 
     #[cfg(feature = "encode")]
     #[test]
-    fn test_rlrq_encode_with_not_finished() {
-        let rlrq = RlrqApdu::with_reason(ReleaseRequestReason::NotFinished);
-        let bytes = rlrq.encode();
+    fn test_rlre_encode_with_not_finished() {
+        let rlre = RlreApdu::with_reason(ReleaseResponseReason::NotFinished);
+        let bytes = rlre.encode();
 
-        assert_eq!(bytes[0], 0x62);
+        assert_eq!(bytes[0], 0x63);
         assert!(bytes.contains(&0x80)); // Context tag 0
         assert!(bytes.contains(&0x01)); // NotFinished reason value
     }
 
     #[cfg(feature = "encode")]
     #[test]
-    fn test_rlrq_encode_with_user_info() {
+    fn test_rlre_encode_with_user_info() {
         let user_info = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let rlrq = RlrqApdu::with_user_info(user_info.clone());
-        let bytes = rlrq.encode();
+        let rlre = RlreApdu::with_user_info(user_info.clone());
+        let bytes = rlre.encode();
 
-        assert_eq!(bytes[0], 0x62);
+        assert_eq!(bytes[0], 0x63);
         assert!(bytes.contains(&0xBE)); // Context tag 30 (0x1E with constructed bit)
         // Should contain the user info bytes wrapped in OCTET STRING
         assert!(bytes.windows(4).any(|w| w == [0xDE, 0xAD, 0xBE, 0xEF]));
@@ -243,23 +240,23 @@ mod tests {
 
     #[cfg(feature = "encode")]
     #[test]
-    fn test_rlrq_encode_empty() {
-        // RLRQ with no reason and no user info
-        let rlrq = RlrqApdu { reason: None, user_information: None };
-        let bytes = rlrq.encode();
+    fn test_rlre_encode_empty() {
+        // RLRE with no reason and no user info
+        let rlre = RlreApdu { reason: None, user_information: None };
+        let bytes = rlre.encode();
 
-        // Should still have APPLICATION tag 2, but with zero or minimal content
-        assert_eq!(bytes[0], 0x62);
+        // Should still have APPLICATION tag 3, but with zero or minimal content
+        assert_eq!(bytes[0], 0x63);
         // Length should be 0 or minimal
         assert!(bytes.len() <= 3); // Tag + length byte(s) only
     }
 
     #[cfg(all(feature = "encode", feature = "parse"))]
     #[test]
-    fn test_rlrq_roundtrip_minimal() {
-        let original = RlrqApdu::new();
+    fn test_rlre_roundtrip_minimal() {
+        let original = RlreApdu::new();
         let bytes = original.encode();
-        let (remaining, parsed) = RlrqApdu::parse(&bytes).expect("Failed to parse");
+        let (remaining, parsed) = RlreApdu::parse(&bytes).expect("Failed to parse");
 
         assert!(remaining.is_empty());
         assert_eq!(parsed.reason, original.reason);
@@ -268,22 +265,22 @@ mod tests {
 
     #[cfg(all(feature = "encode", feature = "parse"))]
     #[test]
-    fn test_rlrq_roundtrip_with_reason() {
-        let original = RlrqApdu::with_reason(ReleaseRequestReason::NotFinished);
+    fn test_rlre_roundtrip_with_reason() {
+        let original = RlreApdu::with_reason(ReleaseResponseReason::NotFinished);
         let bytes = original.encode();
-        let (remaining, parsed) = RlrqApdu::parse(&bytes).expect("Failed to parse");
+        let (remaining, parsed) = RlreApdu::parse(&bytes).expect("Failed to parse");
 
         assert!(remaining.is_empty());
-        assert_eq!(parsed.reason, Some(ReleaseRequestReason::NotFinished));
+        assert_eq!(parsed.reason, Some(ReleaseResponseReason::NotFinished));
     }
 
     #[cfg(all(feature = "encode", feature = "parse"))]
     #[test]
-    fn test_rlrq_roundtrip_with_user_info() {
+    fn test_rlre_roundtrip_with_user_info() {
         let user_info = vec![0x01, 0x02, 0x03, 0x04, 0x05];
-        let original = RlrqApdu::with_user_info(user_info.clone());
+        let original = RlreApdu::with_user_info(user_info.clone());
         let bytes = original.encode();
-        let (remaining, parsed) = RlrqApdu::parse(&bytes).expect("Failed to parse");
+        let (remaining, parsed) = RlreApdu::parse(&bytes).expect("Failed to parse");
 
         assert!(remaining.is_empty());
         assert_eq!(parsed.user_information, Some(user_info));
@@ -291,10 +288,10 @@ mod tests {
 
     #[cfg(all(feature = "encode", feature = "parse"))]
     #[test]
-    fn test_rlrq_roundtrip_empty() {
-        let original = RlrqApdu { reason: None, user_information: None };
+    fn test_rlre_roundtrip_empty() {
+        let original = RlreApdu { reason: None, user_information: None };
         let bytes = original.encode();
-        let (remaining, parsed) = RlrqApdu::parse(&bytes).expect("Failed to parse");
+        let (remaining, parsed) = RlreApdu::parse(&bytes).expect("Failed to parse");
 
         assert!(remaining.is_empty());
         assert_eq!(parsed.reason, None);
@@ -303,19 +300,19 @@ mod tests {
 
     #[cfg(feature = "parse")]
     #[test]
-    fn test_rlrq_parse_invalid_tag() {
-        // Wrong APPLICATION tag (using AARE tag 0x61 instead of RLRQ 0x62)
-        let bytes = vec![0x61, 0x00];
-        let result = RlrqApdu::parse(&bytes);
+    fn test_rlre_parse_invalid_tag() {
+        // Wrong APPLICATION tag (using RLRQ tag 0x62 instead of RLRE 0x63)
+        let bytes = vec![0x62, 0x00];
+        let result = RlreApdu::parse(&bytes);
         assert!(result.is_err());
     }
 
     #[cfg(feature = "parse")]
     #[test]
-    fn test_rlrq_parse_truncated() {
-        // Incomplete RLRQ
-        let bytes = vec![0x62];
-        let result = RlrqApdu::parse(&bytes);
+    fn test_rlre_parse_truncated() {
+        // Incomplete RLRE
+        let bytes = vec![0x63];
+        let result = RlreApdu::parse(&bytes);
         assert!(result.is_err());
     }
 }

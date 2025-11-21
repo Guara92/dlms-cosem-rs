@@ -2,6 +2,12 @@
 #![deny(missing_debug_implementations)]
 
 extern crate alloc;
+
+// Custom getrandom implementation for embedded targets
+// This provides RNG support for bare-metal ARM targets when encryption is used
+// Only compiled for bare-metal ARM targets (getrandom with 'custom' feature required)
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+pub mod getrandom_impl;
 #[cfg(feature = "parse")]
 use alloc::borrow::Cow;
 use alloc::collections::btree_map::BTreeMap;
@@ -59,6 +65,8 @@ pub mod action;
 pub mod association;
 #[cfg(any(feature = "client", feature = "async-client"))]
 pub mod client;
+#[cfg(feature = "async-client")]
+pub use client::r#async as async_client;
 #[cfg(feature = "cosem-objects")]
 pub mod cosem;
 pub mod get;
@@ -114,6 +122,7 @@ pub trait DlmsDataLinkLayer<'i, I> {
 
 #[derive(Debug)]
 pub struct Dlms {
+    #[cfg_attr(not(feature = "parse"), allow(dead_code))]
     key: Key<Aes128>,
 }
 

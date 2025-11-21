@@ -1,17 +1,20 @@
 use core::convert::TryFrom;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeaderType {
     Short,
     Long,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Direction {
     MasterSlave,
     SlaveMaster,
 }
 
+#[allow(dead_code)]
 /// M-Bus control information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlInformation {

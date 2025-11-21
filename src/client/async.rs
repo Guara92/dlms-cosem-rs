@@ -1,17 +1,20 @@
-#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
 use crate::association::{AareApdu, AssociationResult, ReleaseResponseApdu, ReleaseResponseReason};
-use crate::client::sync::{ClientSettings, DlmsSession, SessionState};
+use crate::client::sync::{Buffer, ClientSettings, DlmsSession, SessionState};
 use crate::client::{
     CLOCK_CLASS_ID, CLOCK_TIME_ATTRIBUTE_ID, PROFILE_GENERIC_BUFFER_ATTRIBUTE_ID,
-    PROFILE_GENERIC_CLASS_ID, RECV_BUFFER_SIZE,
+    PROFILE_GENERIC_CLASS_ID,
 };
 use crate::transport::r#async::AsyncTransport;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
+
+#[cfg(feature = "heapless-buffer")]
+use heapless::Vec as HeaplessVec;
 
 #[cfg(feature = "encode")]
 use crate::action::ActionRequest;
@@ -113,73 +116,181 @@ impl<E: fmt::Debug + fmt::Display> std::error::Error for AsyncClientError<E> {}
 /// # Type Parameters
 ///
 /// * `T` - The async transport implementation (must implement `AsyncTransport`)
+/// * `B` - The buffer type (`Vec<u8>` for heap allocation, `heapless::Vec<u8, N>` for stack)
 ///
 /// # Examples
 ///
+/// ## Using heap-allocated buffer (std):
 /// ```rust,no_run
-/// # #[cfg(feature = "tokio")]
-/// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-/// # use dlms_cosem::async_transport::AsyncTransport;
+/// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+/// # use dlms_cosem::transport::r#async::AsyncTransport;
 /// # use dlms_cosem::client::ClientSettings;
-/// # use dlms_cosem::obis_code::ObisCode;
 /// # #[derive(Debug)]
 /// # struct TokioTcpTransport;
 /// # impl AsyncTransport for TokioTcpTransport {
 /// #     type Error = std::io::Error;
 /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
 /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+/// #     #[cfg(feature = "std")]
+/// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
 /// # }
-/// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
 /// let settings = ClientSettings::default();
-/// let transport = TokioTcpTransport; // Your async transport implementation
-/// let mut client = AsyncDlmsClient::new(transport, settings);
+/// let transport = TokioTcpTransport;
+/// let mut client = AsyncClientBuilder::new(transport, settings)
+///     .build_with_heap(2048);
+/// ```
 ///
-/// // Connect to the device
-/// client.connect().await?;
-///
-/// // Read an attribute
-/// let obis = ObisCode::new(1, 0, 1, 8, 0, 255);
-/// let data = client.read(3, obis, 2, None).await?;
-/// println!("Read data: {:?}", data);
-///
-/// // Disconnect
-/// client.disconnect().await?;
-/// # Ok(())
+/// ## Using stack-allocated buffer (no_std):
+/// ```rust,no_run
+/// # #[cfg(feature = "heapless-buffer")]
+/// # {
+/// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+/// # use dlms_cosem::transport::r#async::AsyncTransport;
+/// # use dlms_cosem::client::ClientSettings;
+/// # #[derive(Debug)]
+/// # struct EmbeddedTransport;
+/// # impl AsyncTransport for EmbeddedTransport {
+/// #     type Error = ();
+/// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
+/// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+/// #     #[cfg(feature = "std")]
+/// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
+/// # }
+/// let settings = ClientSettings::default();
+/// let transport = EmbeddedTransport;
+/// let mut client = AsyncClientBuilder::new(transport, settings)
+///     .build_with_heapless::<2048>();
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct AsyncDlmsClient<T: AsyncTransport> {
+pub struct AsyncDlmsClient<T: AsyncTransport, B: Buffer> {
     transport: T,
     session: DlmsSession,
+    buffer: B,
 }
 
-impl<T: AsyncTransport> AsyncDlmsClient<T> {
-    /// Creates a new async DLMS client with the given transport and settings.
+/// Builder for constructing an `AsyncDlmsClient` with flexible buffer allocation strategy.
+///
+/// This builder allows explicit choice between heap-allocated (`Vec<u8>`) and
+/// stack-allocated (`heapless::Vec<u8, N>`) buffers, making the memory allocation
+/// strategy clear at the call site.
+///
+/// # Examples
+///
+/// ## Heap-allocated buffer (std, runtime size):
+/// ```no_run
+/// use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+/// use dlms_cosem::transport::r#async::AsyncTransport;
+/// use dlms_cosem::client::ClientSettings;
+/// # #[derive(Debug)]
+/// # struct MyTransport;
+/// # impl AsyncTransport for MyTransport {
+/// #     type Error = std::io::Error;
+/// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
+/// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+/// #     #[cfg(feature = "std")]
+/// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
+/// # }
+///
+/// let transport = MyTransport;
+/// let settings = ClientSettings::default();
+/// let client = AsyncClientBuilder::new(transport, settings)
+///     .build_with_heap(4096);  // Runtime size decision
+/// ```
+///
+/// ## Stack-allocated buffer (no_std, compile-time size):
+/// ```no_run
+/// # #[cfg(feature = "heapless-buffer")]
+/// # {
+/// use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+/// use dlms_cosem::transport::r#async::AsyncTransport;
+/// use dlms_cosem::client::ClientSettings;
+/// # #[derive(Debug)]
+/// # struct MyTransport;
+/// # impl AsyncTransport for MyTransport {
+/// #     type Error = ();
+/// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
+/// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+/// #     #[cfg(feature = "std")]
+/// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
+/// # }
+///
+/// let transport = MyTransport;
+/// let settings = ClientSettings::default();
+/// let client = AsyncClientBuilder::new(transport, settings)
+///     .build_with_heapless::<2048>();  // Compile-time size
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct AsyncClientBuilder<T: AsyncTransport> {
+    transport: T,
+    settings: ClientSettings,
+}
+
+impl<T: AsyncTransport> AsyncClientBuilder<T> {
+    /// Creates a new async client builder with the given transport and settings.
+    pub fn new(transport: T, settings: ClientSettings) -> Self {
+        Self { transport, settings }
+    }
+
+    /// Builds a client with a heap-allocated buffer of the specified runtime size.
+    ///
+    /// This is suitable for `std` environments where dynamic memory allocation is available.
     ///
     /// # Arguments
+    /// * `buffer_size` - The size of the receive buffer in bytes (determined at runtime)
     ///
-    /// * `transport` - The async transport implementation for I/O operations.
-    /// * `settings` - Client configuration settings.
+    /// # Recommended Sizes
+    /// - **Minimal**: 256 bytes (simple read/write only)
+    /// - **Standard**: 2048 bytes (handles most use cases)
+    /// - **Load Profiles**: 4096-8192 bytes (block transfers)
+    /// - **Maximum**: 65635 bytes (max PDU + overhead)
+    pub fn build_with_heap(self, buffer_size: usize) -> AsyncDlmsClient<T, Vec<u8>> {
+        AsyncDlmsClient {
+            transport: self.transport,
+            session: DlmsSession::new(self.settings),
+            buffer: vec![0u8; buffer_size],
+        }
+    }
+
+    /// Builds a client with a stack-allocated heapless buffer of compile-time size N.
     ///
-    /// # Examples
+    /// This is suitable for `no_std` embedded environments without a heap allocator.
+    /// The buffer size N must be known at compile-time and will be allocated on the stack.
     ///
-    /// ```rust,no_run
-    /// # use dlms_cosem::async_client::AsyncDlmsClient;
-    /// # use dlms_cosem::async_transport::AsyncTransport;
-    /// # use dlms_cosem::client::ClientSettings;
-    /// # #[derive(Debug)]
-    /// # struct MyTransport;
-    /// # impl AsyncTransport for MyTransport {
-    /// #     type Error = std::io::Error;
-    /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
-    /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
-    /// # }
-    /// let settings = ClientSettings::default();
-    /// let transport = MyTransport;
-    /// let client = AsyncDlmsClient::new(transport, settings);
-    /// ```
-    pub fn new(transport: T, settings: ClientSettings) -> Self {
-        Self { transport, session: DlmsSession::new(settings) }
+    /// # Type Parameters
+    /// * `N` - The buffer size in bytes (const generic, determined at compile-time)
+    ///
+    /// # Panics
+    /// Panics if N < 256 (minimum practical DLMS buffer size).
+    ///
+    /// # Note
+    /// Large buffer sizes (>1024 bytes) may cause stack overflow on embedded systems.
+    /// Consider using heap allocation for larger buffers if possible.
+    #[cfg(feature = "heapless-buffer")]
+    pub fn build_with_heapless<const N: usize>(self) -> AsyncDlmsClient<T, HeaplessVec<u8, N>> {
+        assert!(N >= 256, "Buffer size must be at least 256 bytes for DLMS communication");
+
+        let mut buffer = HeaplessVec::new();
+        buffer.resize(N, 0).expect("Buffer initialization failed");
+
+        AsyncDlmsClient {
+            transport: self.transport,
+            session: DlmsSession::new(self.settings),
+            buffer,
+        }
+    }
+}
+
+impl<T: AsyncTransport, B: Buffer> AsyncDlmsClient<T, B> {
+    /// Returns a reference to the underlying transport.
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// Returns a mutable reference to the underlying transport.
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
     }
 
     /// Returns a reference to the current client settings.
@@ -190,6 +301,11 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// Returns a reference to the current session state.
     pub fn state(&self) -> &SessionState {
         self.session.state()
+    }
+
+    /// Returns a reference to the session.
+    pub fn session(&self) -> &DlmsSession {
+        &self.session
     }
 
     /// Establishes an association with the remote DLMS server.
@@ -206,8 +322,8 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
@@ -215,9 +331,12 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    ///     .build_with_heap(2048);
     /// client.connect().await?;
     /// # Ok(())
     /// # }
@@ -234,15 +353,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive AARE
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse AARE
-        let (_rem, aare) =
-            AareApdu::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, aare) = AareApdu::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle AARE
         self.session.handle_aare(&aare).map_err(AsyncClientError::AssociationFailed)?;
@@ -263,8 +381,8 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
@@ -272,9 +390,12 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// client.disconnect().await?;
     /// # Ok(())
     /// # }
@@ -291,15 +412,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive RLRE
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse RLRE
-        let (_rem, rlre) =
-            ReleaseResponseApdu::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, rlre) = ReleaseResponseApdu::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle RLRE
         self.session.handle_release_response(&rlre);
@@ -334,19 +454,22 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// // Read active energy (1.0.1.8.0.255) attribute 2 (value)
     /// let obis = ObisCode::new(1, 0, 1, 8, 0, 255);
     /// let data = client.read(3, obis, 2, None).await?;
@@ -380,15 +503,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive response
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse response
-        let (_rem, response) =
-            GetResponse::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, response) = GetResponse::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle response
         self.session
@@ -415,20 +537,23 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
-    /// # use dlms_cosem::data::Data;
+    /// # use dlms_cosem::ObisCode;
+    /// # use dlms_cosem::Data;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let obis = ObisCode::new(0, 0, 96, 1, 0, 255);
     /// let value = Data::Unsigned(42);
     /// client.write(1, obis, 2, value).await?;
@@ -462,15 +587,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive response
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse response
-        let (_rem, response) =
-            SetResponse::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, response) = SetResponse::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle response
         self.session
@@ -497,20 +621,23 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
-    /// # use dlms_cosem::data::Data;
+    /// # use dlms_cosem::ObisCode;
+    /// # use dlms_cosem::Data;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// // Invoke method 1 (reset) on a register
     /// let obis = ObisCode::new(1, 0, 1, 8, 0, 255);
     /// let result = client.method(3, obis, 1, None).await?;
@@ -544,15 +671,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive response
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse response
-        let (_rem, response) =
-            ActionResponse::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, response) = ActionResponse::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle response
         self.session
@@ -577,10 +703,10 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
     /// # use dlms_cosem::get::AttributeDescriptor;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
@@ -588,9 +714,12 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let descriptors = vec![
     ///     AttributeDescriptor {
     ///         class_id: 3,
@@ -636,15 +765,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive response
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse response
-        let (_rem, response) =
-            GetResponse::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, response) = GetResponse::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle response
         match response {
@@ -682,21 +810,24 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
+    /// # use dlms_cosem::Data;
     /// # use dlms_cosem::get::AttributeDescriptor;
-    /// # use dlms_cosem::data::Data;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let writes = vec![
     ///     (
     ///         AttributeDescriptor {
@@ -749,15 +880,14 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
         self.transport.send(&request_buf).await?;
 
         // Receive response
-        let mut recv_buf = [0u8; RECV_BUFFER_SIZE];
-        let n = self.transport.recv(&mut recv_buf).await?;
+        let n = self.transport.recv(self.buffer.as_mut()).await?;
         if n == 0 {
             return Err(AsyncClientError::ConnectionClosed);
         }
 
         // Parse response
-        let (_rem, response) =
-            SetResponse::parse(&recv_buf[..n]).map_err(|_| AsyncClientError::ParseError)?;
+        let (_rem, response) = SetResponse::parse(&self.buffer.as_ref()[..n])
+            .map_err(|_| AsyncClientError::ParseError)?;
 
         // Handle response
         match response {
@@ -788,10 +918,10 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
     /// # use dlms_cosem::get::AttributeDescriptor;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
@@ -799,9 +929,12 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// // Read 25 attributes - will be split into chunks of 10 (default)
     /// let mut descriptors = Vec::new();
     /// for i in 0..25 {
@@ -856,21 +989,24 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
+    /// # use dlms_cosem::Data;
     /// # use dlms_cosem::get::AttributeDescriptor;
-    /// # use dlms_cosem::data::Data;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let mut writes = Vec::new();
     /// for i in 0..15 {
     ///     writes.push((
@@ -880,7 +1016,7 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     ///             attribute_id: 2,
     ///
     ///         },
-    ///         Data::Unsigned(i as u32),
+    ///         Data::DoubleLongUnsigned(i as u32),
     ///     ));
     /// }
     /// let results = client.write_multiple_chunked(&writes).await?;
@@ -920,7 +1056,6 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// * `obis_code` - OBIS code of the ProfileGeneric object.
     /// * `from` - Optional start date/time.
     /// * `to` - Optional end date/time.
-    /// * `selected_values` - Optional column selection.
     ///
     /// # Returns
     ///
@@ -930,19 +1065,22 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::obis_code::ObisCode;
+    /// # use dlms_cosem::ObisCode;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let obis = ObisCode::new(1, 0, 99, 1, 0, 255);
     /// let profile = client.read_load_profile(obis, None, None).await?;
     /// for row in profile {
@@ -1016,19 +1154,21 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
-    /// #     async fn
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
     /// let time = client.read_clock().await?;
     /// println!("Device time: {:?}", time);
     /// # Ok(())
@@ -1066,22 +1206,25 @@ impl<T: AsyncTransport> AsyncDlmsClient<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use dlms_cosem::async_client::{AsyncDlmsClient, AsyncClientError};
-    /// # use dlms_cosem::async_transport::AsyncTransport;
+    /// # use dlms_cosem::async_client::{AsyncClientBuilder, AsyncClientError};
+    /// # use dlms_cosem::transport::r#async::AsyncTransport;
     /// # use dlms_cosem::client::ClientSettings;
-    /// # use dlms_cosem::data::{DateTime, Date, Time};
+    /// # use dlms_cosem::{DateTime, Date, Time, ObisCode};
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl AsyncTransport for MyTransport {
     /// #     type Error = std::io::Error;
     /// #     async fn send(&mut self, _data: &[u8]) -> Result<(), Self::Error> { Ok(()) }
     /// #     async fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, Self::Error> { Ok(0) }
+    /// #     #[cfg(feature = "std")]
+    /// #     async fn recv_timeout(&mut self, buffer: &mut [u8], _timeout: std::time::Duration) -> Result<usize, Self::Error> { self.recv(buffer).await }
     /// # }
     /// # async fn example() -> Result<(), AsyncClientError<std::io::Error>> {
-    /// # let mut client = AsyncDlmsClient::new(MyTransport, ClientSettings::default());
-    /// let date = Date::new(2025, 1, 30);
-    /// let time = Time::new(14, 30, 0, 0);
-    /// let datetime = DateTime::new(date, time);
+    /// # let mut client = AsyncClientBuilder::new(MyTransport, ClientSettings::default())
+    /// #     .build_with_heap(2048);
+    /// let date = Date::new(2025, 1, 30, 4);
+    /// let time = Time::new(Some(14), Some(30), Some(0), Some(0));
+    /// let datetime = DateTime::new(date, time, None, None);
     /// client.set_clock(datetime).await?;
     /// # Ok(())
     /// # }
@@ -1104,6 +1247,7 @@ mod tests {
         GetResponseWithList,
     };
     use crate::set::{SetResponse, SetResponseNormal};
+    use crate::transport::r#async::MaybeSend;
     use alloc::vec::Vec;
     use core::fmt;
 
@@ -1133,17 +1277,22 @@ mod tests {
         }
     }
 
+    // Unified AsyncTransport implementation using MaybeSend marker
+    // This works for all runtimes (Tokio, Smol, Embassy, Glommio) without duplication
     impl AsyncTransport for MockAsyncTransport {
         type Error = MockTransportError;
 
-        fn send(&mut self, _data: &[u8]) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        fn send(
+            &mut self,
+            _data: &[u8],
+        ) -> impl Future<Output = Result<(), Self::Error>> + MaybeSend {
             async { Ok(()) }
         }
 
         fn recv(
             &mut self,
             buffer: &mut [u8],
-        ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+        ) -> impl Future<Output = Result<usize, Self::Error>> + MaybeSend {
             async move {
                 if self.current_response >= self.response_queue.len() {
                     return Ok(0);
@@ -1156,6 +1305,32 @@ mod tests {
                 Ok(len)
             }
         }
+
+        #[cfg(feature = "std")]
+        fn recv_timeout(
+            &mut self,
+            buffer: &mut [u8],
+            _timeout: std::time::Duration,
+        ) -> impl Future<Output = Result<usize, Self::Error>> + MaybeSend {
+            // For mock transport, just call recv (ignore timeout)
+            self.recv(buffer)
+        }
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[tokio::test]
+    async fn test_async_client_builder_heap() {
+        let transport = MockAsyncTransport::new();
+        let settings = ClientSettings::default();
+        let _client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse", feature = "heapless-buffer"))]
+    #[tokio::test]
+    async fn test_async_client_builder_heapless() {
+        let transport = MockAsyncTransport::new();
+        let settings = ClientSettings::default();
+        let _client = AsyncClientBuilder::new(transport, settings).build_with_heapless::<2048>();
     }
 
     #[cfg(all(feature = "encode", feature = "parse"))]
@@ -1180,7 +1355,7 @@ mod tests {
         };
 
         transport.add_response(aare.encode());
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
         let result = client.connect().await;
 
         assert!(result.is_ok());
@@ -1215,7 +1390,7 @@ mod tests {
         });
         transport.add_response(get_response.encode());
 
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
         client.connect().await.unwrap();
 
         let obis = ObisCode::new(1, 0, 1, 8, 0, 255);
@@ -1230,7 +1405,7 @@ mod tests {
     async fn test_async_client_read_not_associated() {
         let transport = MockAsyncTransport::new();
         let settings = ClientSettings::default();
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
 
         let obis = ObisCode::new(1, 0, 1, 8, 0, 255);
         let result = client.read(3, obis, 2, None).await;
@@ -1266,7 +1441,7 @@ mod tests {
         });
         transport.add_response(set_response.encode());
 
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
         client.connect().await.unwrap();
 
         let obis = ObisCode::new(0, 0, 96, 1, 0, 255);
@@ -1306,7 +1481,7 @@ mod tests {
         });
         transport.add_response(get_response.encode());
 
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
         client.connect().await.unwrap();
 
         let descriptors = alloc::vec![
@@ -1368,7 +1543,7 @@ mod tests {
         });
         transport.add_response(response2.encode());
 
-        let mut client = AsyncDlmsClient::new(transport, settings);
+        let mut client = AsyncClientBuilder::new(transport, settings).build_with_heap(2048);
         client.connect().await.unwrap();
 
         let descriptors = alloc::vec![

@@ -10,7 +10,10 @@ use core::fmt;
 
 use super::ReleaseResponseReason;
 
-#[cfg(any(feature = "encode", feature = "parse"))]
+#[cfg(feature = "encode")]
+use alloc::vec;
+
+#[cfg(feature = "encode")]
 use super::ber::TagType;
 
 #[cfg(feature = "encode")]

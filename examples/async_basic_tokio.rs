@@ -23,7 +23,7 @@
 //! - parse
 
 use dlms_cosem::ObisCode;
-use dlms_cosem::client::sync::ClientSettings;
+use dlms_cosem::client::ClientSettings;
 
 #[cfg(all(feature = "async-client", feature = "tokio", feature = "encode", feature = "parse"))]
 #[tokio::main]
@@ -67,7 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Note: This example shows API usage patterns\n");
 
     // Uncomment when using real transport:
-    // let mut client = AsyncDlmsClient::new(transport, settings);
+    // let mut client = AsyncClientBuilder::new(transport, settings)
+    //     .build_with_heap(2048);
 
     // ============================================================================
     // STEP 3: Connect to Server
@@ -198,11 +199,15 @@ evelSecurity {{ ... }});"
     println!("  5. Use connection pooling for multiple meters");
     println!("  6. Add timeouts with tokio::time::timeout()");
 
-    println!("\nRelated examples:");
-    println!("  - async_multiple_reads.rs - Concurrent reads and batching");
-    println!("  - async_load_profile.rs   - ProfileGeneric with selective access");
-    println!("  - async_clock_sync.rs     - Clock synchronization");
-    println!("  - async_client_smol.rs    - Lightweight async with smol runtime");
+    println!("\nBuffer allocation options:");
+    println!("  - Heap allocation (runtime size):");
+    println!("      AsyncClientBuilder::new(transport, settings).build_with_heap(2048)");
+    println!("  - Stack allocation (compile-time size, no_std):");
+    println!("      AsyncClientBuilder::new(transport, settings).build_with_heapless::<2048>()");
+    println!();
+    println!("Related examples:");
+    println!("  - tcp_transport_async_tokio.rs - Real TCP transport");
+    println!("  - tcp_transport_async_smol.rs  - Lightweight async with smol runtime");
 
     Ok(())
 }

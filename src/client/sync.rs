@@ -1,4 +1,3 @@
-#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
@@ -12,6 +11,7 @@ use crate::client::{
     PROFILE_GENERIC_BUFFER_ATTRIBUTE_ID, PROFILE_GENERIC_CLASS_ID,
 };
 use crate::transport::sync::Transport;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
@@ -1446,7 +1446,7 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
 mod tests {
     use super::*;
     use crate::association::AcseServiceUserDiagnostics;
-    use alloc::{boxed::Box, vec::Vec};
+    use alloc::vec::Vec;
     use core::cell::RefCell;
 
     #[derive(Debug)]

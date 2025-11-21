@@ -116,7 +116,7 @@
 
 use crate::{Data, ObisCode};
 
-#[cfg(all(not(feature = "std"), feature = "encode"))]
+#[cfg(not(feature = "std"))]
 use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
