@@ -9,8 +9,8 @@ use crate::association::{
 };
 use crate::transport::Transport;
 use alloc::vec::Vec;
-use core::fmt::Debug;
 use core::fmt;
+use core::fmt::Debug;
 
 #[cfg(feature = "encode")]
 use crate::action::{ActionRequest, ActionRequestNormal};
@@ -123,6 +123,11 @@ pub struct ClientSettings {
     /// Maximum PDU size the client can receive.
     /// Default: 0xFFFF (65535).
     pub max_pdu_size: u16,
+    /// Maximum number of attributes per request for bulk operations.
+    /// Used by chunked read/write methods to split large requests.
+    /// Default: Some(10) for Gurux compatibility.
+    /// Set to None for no limit.
+    pub max_attributes_per_request: Option<usize>,
 }
 
 /// Class ID for Clock object
@@ -137,6 +142,9 @@ const PROFILE_GENERIC_CLASS_ID: u16 = 7;
 /// Attribute ID for ProfileGeneric.buffer
 const PROFILE_GENERIC_BUFFER_ATTRIBUTE_ID: i8 = 2;
 
+/// Default maximum attributes per request (Gurux compatibility)
+const DEFAULT_MAX_ATTRIBUTES_PER_REQUEST: usize = 10;
+
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
@@ -146,6 +154,7 @@ impl Default for ClientSettings {
             authentication_value: None,
             application_context_name: ApplicationContextName::LogicalNameReferencing,
             max_pdu_size: 0xFFFF,
+            max_attributes_per_request: Some(DEFAULT_MAX_ATTRIBUTES_PER_REQUEST),
         }
     }
 }
@@ -1108,7 +1117,7 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
     ///
     /// ```no_run
     /// # use dlms_cosem::client::{ClientBuilder, ClientSettings};
-    /// # use dlms_cosem::{ObisCode, DateTime};
+    /// # use dlms_cosem::{ObisCode, DateTime, Date, Time};
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl dlms_cosem::transport::Transport for MyTransport {
@@ -1121,8 +1130,18 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
     /// # let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
     /// // Read last 24 hours of load profile data
     /// let obis = ObisCode::new(1, 0, 99, 1, 0, 255);
-    /// let from = DateTime::from_ymd_hms(2025, 1, 29, 0, 0, 0);
-    /// let to = DateTime::from_ymd_hms(2025, 1, 30, 0, 0, 0);
+    /// let from = DateTime::new(
+    ///     Date::new(2025, 1, 29, 0xFF),
+    ///     Time::new(Some(0), Some(0), Some(0), None),
+    ///     None,
+    ///     None
+    /// );
+    /// let to = DateTime::new(
+    ///     Date::new(2025, 1, 30, 0xFF),
+    ///     Time::new(Some(0), Some(0), Some(0), None),
+    ///     None,
+    ///     None
+    /// );
     /// let profile_data = client.read_load_profile(obis, from, to);
     /// ```
     #[cfg(all(feature = "encode", feature = "parse"))]
@@ -1243,7 +1262,7 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
     ///
     /// ```no_run
     /// # use dlms_cosem::client::{ClientBuilder, ClientSettings};
-    /// # use dlms_cosem::DateTime;
+    /// # use dlms_cosem::{DateTime, Date, Time};
     /// # #[derive(Debug)]
     /// # struct MyTransport;
     /// # impl dlms_cosem::transport::Transport for MyTransport {
@@ -1254,7 +1273,12 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
     /// # let transport = MyTransport;
     /// # let settings = ClientSettings::default();
     /// # let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
-    /// let new_time = DateTime::from_ymd_hms(2025, 1, 30, 12, 0, 0);
+    /// let new_time = DateTime::new(
+    ///     Date::new(2025, 1, 30, 0xFF),
+    ///     Time::new(Some(12), Some(0), Some(0), None),
+    ///     None,
+    ///     None
+    /// );
     /// client.set_clock(new_time);
     /// ```
     #[cfg(all(feature = "encode", feature = "parse"))]
@@ -1265,7 +1289,167 @@ impl<T: Transport, B: Buffer> DlmsClient<T, B> {
             CLOCK_TIME_ATTRIBUTE_ID,
             Data::DateTime(time),
             None,
-        )
+        )?;
+        Ok(())
+    }
+
+    /// Read multiple attributes with automatic chunking.
+    ///
+    /// This method splits large bulk read operations into smaller chunks based on
+    /// the maximum attributes per request. This is useful when:
+    /// - The server has PDU size limitations
+    /// - Compatibility with devices that reject large requests
+    /// - Following Gurux DLMS.c defaults (10 attributes per request)
+    ///
+    /// # Arguments
+    ///
+    /// * `requests` - Slice of tuples (class_id, obis_code, attribute_id)
+    /// * `max_per_request` - Optional override for max attributes per request.
+    ///   If None, uses the value from ClientSettings. If that's also None,
+    ///   sends all attributes in a single request.
+    ///
+    /// # Returns
+    ///
+    /// Vector of Results, one per request. Each element is either:
+    /// - `Ok(Data)` - Successfully read data
+    /// - `Err(DataAccessResult)` - Error for that specific attribute
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError` if:
+    /// - Not associated with the server
+    /// - Transport error occurs in any chunk
+    /// - Response cannot be parsed
+    /// - Invoke ID mismatch
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use dlms_cosem::client::{ClientBuilder, ClientSettings};
+    /// # use dlms_cosem::ObisCode;
+    /// # #[derive(Debug)]
+    /// # struct MyTransport;
+    /// # impl dlms_cosem::transport::Transport for MyTransport {
+    /// #     type Error = ();
+    /// #     fn send(&mut self, _data: &[u8]) -> Result<(), ()> { Ok(()) }
+    /// #     fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, ()> { Ok(0) }
+    /// # }
+    /// # let transport = MyTransport;
+    /// # let settings = ClientSettings::default();
+    /// # let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+    /// // Read 25 registers - will be split into 3 chunks (10+10+5)
+    /// let mut requests = Vec::new();
+    /// for i in 0..25 {
+    ///     requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+    /// }
+    /// let results = client.read_multiple_chunked(&requests, None);
+    /// ```
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    pub fn read_multiple_chunked(
+        &mut self,
+        requests: &[(u16, ObisCode, i8)],
+        max_per_request: Option<usize>,
+    ) -> Result<Vec<Result<Data, DataAccessResult>>, ClientError<T::Error>> {
+        if !self.session.state.associated {
+            return Err(ClientError::NotAssociated);
+        }
+
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Determine chunk size
+        let chunk_size = max_per_request
+            .or(self.session.settings.max_attributes_per_request)
+            .unwrap_or(requests.len()); // No limit if both are None
+
+        let mut all_results = Vec::with_capacity(requests.len());
+
+        // Process requests in chunks
+        for chunk in requests.chunks(chunk_size) {
+            let chunk_results = self.read_multiple(chunk)?;
+            all_results.extend(chunk_results);
+        }
+
+        Ok(all_results)
+    }
+
+    /// Write multiple attributes with automatic chunking.
+    ///
+    /// This method splits large bulk write operations into smaller chunks based on
+    /// the maximum attributes per request. This ensures compatibility with devices
+    /// that have PDU size limitations or reject large requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `requests` - Slice of tuples (class_id, obis_code, attribute_id, value)
+    /// * `max_per_request` - Optional override for max attributes per request.
+    ///   If None, uses the value from ClientSettings. If that's also None,
+    ///   sends all attributes in a single request.
+    ///
+    /// # Returns
+    ///
+    /// Vector of `DataAccessResult`, one per request. Each element indicates
+    /// success or the specific error for that write operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError` if:
+    /// - Not associated with the server
+    /// - Transport error occurs in any chunk
+    /// - Response cannot be parsed
+    /// - Invoke ID mismatch
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use dlms_cosem::client::{ClientBuilder, ClientSettings};
+    /// # use dlms_cosem::{ObisCode, Data};
+    /// # #[derive(Debug)]
+    /// # struct MyTransport;
+    /// # impl dlms_cosem::transport::Transport for MyTransport {
+    /// #     type Error = ();
+    /// #     fn send(&mut self, _data: &[u8]) -> Result<(), ()> { Ok(()) }
+    /// #     fn recv(&mut self, _buffer: &mut [u8]) -> Result<usize, ()> { Ok(0) }
+    /// # }
+    /// # let transport = MyTransport;
+    /// # let settings = ClientSettings::default();
+    /// # let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+    /// // Write 15 data objects - will be split into 2 chunks (10+5)
+    /// let mut requests = Vec::new();
+    /// for i in 0..15 {
+    ///     requests.push((1, ObisCode::new(0, 0, 96, 1, i, 255), 2, Data::Unsigned(i as u8)));
+    /// }
+    /// let results = client.write_multiple_chunked(&requests, None);
+    /// ```
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    pub fn write_multiple_chunked(
+        &mut self,
+        requests: &[(u16, ObisCode, i8, Data)],
+        max_per_request: Option<usize>,
+    ) -> Result<Vec<DataAccessResult>, ClientError<T::Error>> {
+        if !self.session.state.associated {
+            return Err(ClientError::NotAssociated);
+        }
+
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Determine chunk size
+        let chunk_size = max_per_request
+            .or(self.session.settings.max_attributes_per_request)
+            .unwrap_or(requests.len()); // No limit if both are None
+
+        let mut all_results = Vec::with_capacity(requests.len());
+
+        // Process requests in chunks
+        for chunk in requests.chunks(chunk_size) {
+            let chunk_results = self.write_multiple(chunk)?;
+            all_results.extend(chunk_results);
+        }
+
+        Ok(all_results)
     }
 }
 
@@ -1279,16 +1463,16 @@ mod tests {
     #[derive(Debug)]
     struct MockTransport {
         sent_data: RefCell<Vec<Vec<u8>>>,
-        recv_data: RefCell<Vec<u8>>,
+        response_queue: RefCell<Vec<Vec<u8>>>,
     }
 
     impl MockTransport {
         fn new() -> Self {
-            Self { sent_data: RefCell::new(Vec::new()), recv_data: RefCell::new(Vec::new()) }
+            Self { sent_data: RefCell::new(Vec::new()), response_queue: RefCell::new(Vec::new()) }
         }
 
         fn push_response(&self, data: Vec<u8>) {
-            self.recv_data.borrow_mut().extend(data);
+            self.response_queue.borrow_mut().push(data);
         }
     }
 
@@ -1301,13 +1485,13 @@ mod tests {
         }
 
         fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            let mut recv = self.recv_data.borrow_mut();
-            if recv.is_empty() {
+            let mut queue = self.response_queue.borrow_mut();
+            if queue.is_empty() {
                 return Ok(0);
             }
-            let len = core::cmp::min(buffer.len(), recv.len());
-            buffer[..len].copy_from_slice(&recv[..len]);
-            *recv = recv.split_off(len);
+            let response = queue.remove(0);
+            let len = core::cmp::min(buffer.len(), response.len());
+            buffer[..len].copy_from_slice(&response[..len]);
             Ok(len)
         }
     }
@@ -2212,5 +2396,480 @@ mod tests {
         let result = client.read_load_profile(obis, from, to);
 
         assert!(matches!(result, Err(ClientError::InvalidResponseData)));
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_read_multiple_chunked_single_chunk() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Prepare GET-Response-With-List for 5 attributes (under default limit of 10)
+        let response = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: vec![
+                GetDataResult::Data(Data::DoubleLongUnsigned(1)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(2)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(3)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(4)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(5)),
+            ],
+        });
+        client.transport.push_response(response.encode());
+
+        let requests = [
+            (3, ObisCode::new(1, 0, 1, 8, 0, 255), 2),
+            (3, ObisCode::new(1, 0, 2, 8, 0, 255), 2),
+            (3, ObisCode::new(1, 0, 3, 8, 0, 255), 2),
+            (3, ObisCode::new(1, 0, 4, 8, 0, 255), 2),
+            (3, ObisCode::new(1, 0, 5, 8, 0, 255), 2),
+        ];
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 5);
+        assert!(matches!(results[0], Ok(Data::DoubleLongUnsigned(1))));
+        assert!(matches!(results[1], Ok(Data::DoubleLongUnsigned(2))));
+        assert!(matches!(results[2], Ok(Data::DoubleLongUnsigned(3))));
+        assert!(matches!(results[3], Ok(Data::DoubleLongUnsigned(4))));
+        assert!(matches!(results[4], Ok(Data::DoubleLongUnsigned(5))));
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_read_multiple_chunked_multiple_chunks() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Prepare responses for 3 chunks: 10 + 10 + 5 = 25 attributes
+        // First chunk (10 items)
+        let response1 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: (1..=10).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response1.encode());
+
+        // Second chunk (10 items)
+        let response2 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 1,
+            results: (11..=20).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response2.encode());
+
+        // Third chunk (5 items)
+        let response3 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 2,
+            results: (21..=25).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response3.encode());
+
+        // Create 25 requests
+        let mut requests = Vec::new();
+        for i in 0..25 {
+            requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+        }
+
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 25);
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.is_ok());
+            if let Ok(Data::DoubleLongUnsigned(val)) = result {
+                assert_eq!(*val, (i + 1) as u32);
+            }
+        }
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_read_multiple_chunked_exact_boundary() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Prepare responses for exactly 20 attributes (2 chunks of 10)
+        let response1 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: (1..=10).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response1.encode());
+
+        let response2 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 1,
+            results: (11..=20).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response2.encode());
+
+        let mut requests = Vec::new();
+        for i in 0..20 {
+            requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+        }
+
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 20);
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_write_multiple_chunked_success() {
+        use crate::set::{SetResponse, SetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Prepare responses for 2 chunks: 10 + 5 = 15 writes
+        let response1 = SetResponse::WithList(SetResponseWithList {
+            invoke_id: 0,
+            results: vec![DataAccessResult::Success; 10],
+        });
+        client.transport.push_response(response1.encode());
+
+        let response2 = SetResponse::WithList(SetResponseWithList {
+            invoke_id: 1,
+            results: vec![DataAccessResult::Success; 5],
+        });
+        client.transport.push_response(response2.encode());
+
+        let mut requests = Vec::new();
+        for i in 0..15 {
+            requests.push((1, ObisCode::new(0, 0, 96, 1, i, 255), 2, Data::Unsigned(i)));
+        }
+
+        let results = client.write_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 15);
+        for result in results {
+            assert_eq!(result, DataAccessResult::Success);
+        }
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_chunked_with_errors() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // First chunk succeeds
+        let response1 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: (1..=10).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response1.encode());
+
+        // Second chunk has mixed results
+        let response2 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 1,
+            results: vec![
+                GetDataResult::Data(Data::DoubleLongUnsigned(11)),
+                GetDataResult::DataAccessError(DataAccessResult::ObjectUndefined),
+                GetDataResult::Data(Data::DoubleLongUnsigned(13)),
+            ],
+        });
+        client.transport.push_response(response2.encode());
+
+        let mut requests = Vec::new();
+        for i in 0..13 {
+            requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+        }
+
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 13);
+        // First 10 succeed
+        for result in results.iter().take(10) {
+            assert!(result.is_ok());
+        }
+        // 11th succeeds
+        assert!(matches!(results[10], Ok(Data::DoubleLongUnsigned(11))));
+        // 12th fails
+        assert!(matches!(results[11], Err(DataAccessResult::ObjectUndefined)));
+        // 13th succeeds
+        assert!(matches!(results[12], Ok(Data::DoubleLongUnsigned(13))));
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_chunked_empty_request() {
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        let requests: Vec<(u16, ObisCode, i8)> = Vec::new();
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_chunked_custom_size() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Override chunk size to 3 - should create 4 chunks (3+3+3+1)
+        // First chunk (3 items)
+        let response1 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: vec![
+                GetDataResult::Data(Data::DoubleLongUnsigned(1)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(2)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(3)),
+            ],
+        });
+        client.transport.push_response(response1.encode());
+
+        // Second chunk (3 items)
+        let response2 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 1,
+            results: vec![
+                GetDataResult::Data(Data::DoubleLongUnsigned(4)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(5)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(6)),
+            ],
+        });
+        client.transport.push_response(response2.encode());
+
+        // Third chunk (3 items)
+        let response3 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 2,
+            results: vec![
+                GetDataResult::Data(Data::DoubleLongUnsigned(7)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(8)),
+                GetDataResult::Data(Data::DoubleLongUnsigned(9)),
+            ],
+        });
+        client.transport.push_response(response3.encode());
+
+        // Fourth chunk (1 item)
+        let response4 = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 3,
+            results: vec![GetDataResult::Data(Data::DoubleLongUnsigned(10))],
+        });
+        client.transport.push_response(response4.encode());
+
+        let mut requests = Vec::new();
+        for i in 0..10 {
+            requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+        }
+
+        // Override max_per_request to 3
+        let results = client.read_multiple_chunked(&requests, Some(3));
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 10);
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.is_ok());
+            if let Ok(Data::DoubleLongUnsigned(val)) = result {
+                assert_eq!(*val, (i + 1) as u32);
+            }
+        }
+    }
+
+    #[cfg(all(feature = "encode", feature = "parse"))]
+    #[test]
+    fn test_chunked_no_limit() {
+        use crate::get::{GetDataResult, GetResponse, GetResponseWithList};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings { max_attributes_per_request: None, ..Default::default() };
+
+        // Connect first
+        let aare = AareApdu {
+            protocol_version: 1,
+            application_context_name: ApplicationContextName::LogicalNameReferencing,
+            result: AssociationResult::Accepted,
+            result_source_diagnostic: AcseServiceUserDiagnostics::Null,
+            responding_ap_title: None,
+            responding_ae_qualifier: None,
+            responding_ap_invocation_id: None,
+            responding_ae_invocation_id: None,
+            responder_acse_requirements: None,
+            mechanism_name: None,
+            responding_authentication_value: None,
+            user_information: None,
+        };
+        transport.push_response(aare.encode());
+
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+        client.connect().unwrap();
+
+        // Should send all 25 in single request
+        let response = GetResponse::WithList(GetResponseWithList {
+            invoke_id: 0,
+            results: (1..=25).map(|i| GetDataResult::Data(Data::DoubleLongUnsigned(i))).collect(),
+        });
+        client.transport.push_response(response.encode());
+
+        let mut requests = Vec::new();
+        for i in 0..25 {
+            requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+        }
+
+        let results = client.read_multiple_chunked(&requests, None);
+
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        assert_eq!(results.len(), 25);
     }
 }

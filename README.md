@@ -208,7 +208,14 @@ This library implements **~47% of the DLMS/COSEM specification** (Green Book Ed.
     - **Clock Synchronization**: `read_clock()`, `set_clock()` - simplified time management
     - Type-safe return values and comprehensive error handling
     - 10 comprehensive tests for all convenience methods
-  - ✅ **Comprehensive Testing**: 971 total tests (22 client-specific tests)
+  - ✅ **Advanced Chunking**: Automatic request splitting for large bulk operations (Phase 6.2.1 - 2025-01-30)
+    - **Chunked Operations**: `read_multiple_chunked()`, `write_multiple_chunked()` - automatic splitting of large requests
+    - **Configurable Chunk Size**: Default 10 attributes per request (Gurux compatible), fully customizable
+    - **Transparent Assembly**: Results automatically assembled in original order
+    - **Smart Defaults**: `ClientSettings.max_attributes_per_request = Some(10)`
+    - PDU size compatibility for devices with limitations
+    - 8 comprehensive tests covering all chunking scenarios
+  - ✅ **Comprehensive Testing**: 1078 total tests (979 unit + 99 doc tests, 30 client-specific)
   - ✅ **Production Quality**: 100% safe Rust, zero clippy warnings, >95% test coverage
   
 ### 🚧 Not Yet Implemented
@@ -223,7 +230,7 @@ This library implements **~47% of the DLMS/COSEM specification** (Green Book Ed.
 
 ```toml
 [dependencies]
-dlms_cosem = "0.4"
+dlms_cosem = "0.5"
 ```
 
 ```rust
@@ -240,7 +247,7 @@ Save ~100KB by excluding the `nom` parser library:
 
 ```toml
 [dependencies]
-dlms_cosem = { version = "0.4", default-features = false, features = ["std", "encode"] }
+dlms_cosem = { version = "0.5", default-features = false, features = ["std", "encode"] }
 ```
 
 ```rust
@@ -447,6 +454,36 @@ client.disconnect()?;
 
 **Note**: All requests are automatically encrypted when `SecurityContext` is configured. No security context = plaintext communication. Zero overhead when encryption is not needed.
 
+
+### Advanced Chunking (Phase 6.2.1)
+
+```rust
+use dlms_cosem::client::{ClientBuilder, ClientSettings};
+use dlms_cosem::ObisCode;
+
+let mut client = ClientBuilder::new(transport, ClientSettings::default())
+    .build_with_heap(2048);
+
+client.connect()?;
+
+// Read 25 registers - automatically chunked into 3 requests (10+10+5)
+let mut requests = Vec::new();
+for i in 0..25 {
+    requests.push((3, ObisCode::new(1, 0, i, 8, 0, 255), 2));
+}
+
+let results = client.read_multiple_chunked(&requests, None)?;
+// Returns Vec<Result<Data, DataAccessResult>> with 25 elements
+
+// Custom chunk size
+let results = client.read_multiple_chunked(&requests, Some(5))?;
+
+// Disable chunking for devices that support large requests
+let settings = ClientSettings {
+    max_attributes_per_request: None,
+    ..Default::default()
+};
+```
 
 ### Advanced Convenience Methods (Phase 6.1.4)
 
