@@ -10,8 +10,8 @@
 //! Note: This is a demonstration example with a mock transport.
 //! For real usage, replace MockTransport with TcpTransport or HdlcTransport.
 
-use dlms_cosem::client::{ClientBuilder, ClientSettings};
-use dlms_cosem::transport::Transport;
+use dlms_cosem::client::sync::{ClientBuilder, ClientSettings};
+use dlms_cosem::transport::sync::Transport;
 use dlms_cosem::{Data, ObisCode};
 
 #[cfg(feature = "std")]

@@ -1,40 +1,22 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+//! DLMS transport layer abstractions (sync and async).
+//!
+//! This module provides transport layer traits for both synchronous and asynchronous I/O:
+//! - [`sync::Transport`] - Synchronous transport trait for blocking I/O
+//! - [`async::AsyncTransport`] - Asynchronous transport trait for non-blocking I/O
+//!
+//! Transport implementations handle the low-level sending and receiving of bytes
+//! over physical media (TCP, serial, etc.), while the client layer handles DLMS
+//! protocol logic.
 
-#[cfg(feature = "std")]
-use std::time::Duration;
+#[cfg(feature = "client")]
+pub mod sync;
 
-/// Trait representing the underlying transport layer for DLMS/COSEM communication.
-///
-/// This trait allows the `DlmsClient` to be agnostic of the actual communication medium
-/// (TCP, UDP, Serial, HDLC, etc.).
-///
-/// Implementations should handle the low-level details of sending and receiving bytes.
-pub trait Transport: core::fmt::Debug {
-    /// The error type returned by transport operations.
-    type Error: core::fmt::Debug;
+#[cfg(feature = "async-client")]
+pub mod r#async;
 
-    /// Sends data to the remote device.
-    fn send(&mut self, data: &[u8]) -> Result<(), Self::Error>;
+// Re-export commonly used types for convenience
+#[cfg(feature = "client")]
+pub use sync::Transport;
 
-    /// Receives data from the remote device.
-    ///
-    /// This function should populate the provided buffer with received data.
-    /// Returns the number of bytes read.
-    fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
-
-    /// Receives data from the remote device with a timeout.
-    ///
-    /// This function should populate the provided buffer with received data.
-    /// Returns the number of bytes read, or an error if the timeout expires.
-    ///
-    /// Default implementation calls `recv` (no timeout support).
-    /// Override this method to provide actual timeout functionality.
-    #[cfg(feature = "std")]
-    fn recv_timeout(
-        &mut self,
-        buffer: &mut [u8],
-        _timeout: Duration,
-    ) -> Result<usize, Self::Error> {
-        self.recv(buffer)
-    }
-}
+#[cfg(feature = "async-client")]
+pub use r#async::AsyncTransport;
