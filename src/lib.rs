@@ -57,6 +57,8 @@ pub use unit::{ScalerUnit, Unit};
 pub mod action;
 #[cfg(feature = "association")]
 pub mod association;
+#[cfg(feature = "client")]
+pub mod client;
 #[cfg(feature = "cosem-objects")]
 pub mod cosem;
 pub mod get;
@@ -66,6 +68,8 @@ pub mod hdlc;
 pub mod mbus;
 pub mod selective_access;
 pub mod set;
+#[cfg(feature = "client")]
+pub mod transport;
 
 #[cfg(test)]
 mod lib_tests;

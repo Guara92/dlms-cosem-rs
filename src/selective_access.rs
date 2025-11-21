@@ -655,7 +655,10 @@ impl EntryDescriptor {
 #[cfg(feature = "encode")]
 mod tests {
     use super::*;
-    use crate::{DateTime, ObisCode};
+    use crate::ObisCode;
+
+    #[cfg(any(feature = "chrono-conversions", feature = "jiff-conversions"))]
+    use crate::DateTime;
 
     /// Test: RangeDescriptor creation
     #[test]

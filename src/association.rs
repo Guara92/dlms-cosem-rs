@@ -32,8 +32,8 @@ pub use self::{
     conformance::Conformance,
     enums::*,
     initiate::{InitiateRequest, InitiateResponse},
-    rlre::RlreApdu,
-    rlrq::RlrqApdu,
+    rlre::{RlreApdu, RlreApdu as ReleaseResponseApdu},
+    rlrq::{RlrqApdu, RlrqApdu as ReleaseRequestApdu},
 };
 
 mod aare;
