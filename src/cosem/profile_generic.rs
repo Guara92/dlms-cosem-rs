@@ -311,7 +311,11 @@ impl CosemObject for ProfileGeneric {
                 // Encode buffer as Array of Arrays (convert VecDeque to Vec for encoding)
                 let rows: Vec<Data> =
                     self.buffer.iter().map(|row| Data::Structure(row.clone())).collect();
-                Ok(Data::Structure(rows))
+                if rows.is_empty() {
+                    Ok(Data::Structure(rows))
+                } else {
+                    Ok(Data::CompactArray(rows))
+                }
             }
             3 => {
                 // Encode capture_objects as Array of Structures
@@ -1108,10 +1112,10 @@ mod tests {
         profile.entries_in_use = 2;
         let result = profile.get_attribute(2);
         assert!(result.is_ok());
-        if let Data::Structure(rows) = result.unwrap() {
+        if let Data::CompactArray(rows) = result.unwrap() {
             assert_eq!(rows.len(), 2);
         } else {
-            panic!("Expected Structure");
+            panic!("Expected CompactArray");
         }
     }
 
@@ -2021,10 +2025,10 @@ mod tests {
         // Get buffer attribute (should not panic)
         let result = profile.get_attribute(2);
         assert!(result.is_ok());
-        if let Data::Structure(rows) = result.unwrap() {
+        if let Data::CompactArray(rows) = result.unwrap() {
             assert_eq!(rows.len(), 500);
         } else {
-            panic!("Expected Structure");
+            panic!("Expected CompactArray");
         }
     }
 
