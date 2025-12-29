@@ -706,6 +706,8 @@ pub enum Data {
     Date(Date),
     Time(Time),
     Structure(Vec<Data>),
+    CompactArray(Vec<Data>),
+    Array(Vec<Data>),
     Enum(u8),
 }
 
@@ -744,6 +746,96 @@ impl Data {
                 | Data::Float64(_)
         )
     }
+
+    /// Get the type description bytes for this Data object.
+    /// This is used for CompactArray encoding.
+    #[cfg(feature = "encode")]
+    pub fn get_type_description(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        match self {
+            Data::Null => buffer.push(0x00),
+            Data::Array(_) => {
+                buffer.push(0x01);
+            }
+            Data::Structure(elements) => {
+                buffer.push(0x02); // Structure tag
+                // Number of elements encoded as length
+                buffer.push_length(elements.len());
+                for element in elements {
+                    buffer.extend(element.get_type_description());
+                }
+            }
+            // Data::Bool is not in Data enum, using 0x03 if it was
+            Data::BitString(_) => buffer.push(0x04),
+            Data::DoubleLong(_) => buffer.push(0x05),
+            Data::DoubleLongUnsigned(_) => buffer.push(0x06),
+            Data::OctetString(_) => buffer.push(0x09),
+            // Data::VisibleString is not in Data enum
+            Data::Utf8String(_) => buffer.push(0x0C),
+            // Data::BinaryCodedDecimal is not in Data enum
+            Data::Integer(_) => buffer.push(0x0F),
+            Data::Long(_) => buffer.push(0x10),
+            Data::Unsigned(_) => buffer.push(0x11),
+            Data::LongUnsigned(_) => buffer.push(0x12),
+            Data::CompactArray(_) => unimplemented!("Nested CompactArray not supported"),
+            Data::Long64(_) => buffer.push(0x14),
+            Data::Long64Unsigned(_) => buffer.push(0x15),
+            Data::Enum(_) => buffer.push(0x16),
+            Data::Float32(_) => buffer.push(0x17),
+            Data::Float64(_) => buffer.push(0x18),
+            Data::DateTime(_) => buffer.push(0x19),
+            Data::Date(_) => buffer.push(0x1A),
+            Data::Time(_) => buffer.push(0x1B),
+        }
+        buffer
+    }
+
+    /// Encode the value only (without the tag).
+    /// Used for CompactArray contents.
+    #[cfg(feature = "encode")]
+    pub fn encode_value_only(&self, buffer: &mut Vec<u8>) {
+        match self {
+            Data::Null => {} // No value bytes
+            Data::Integer(v) => buffer.push_i8(*v),
+            Data::Unsigned(v) => buffer.push_u8(*v),
+            Data::Long(v) => buffer.push_i16(*v),
+            Data::LongUnsigned(v) => buffer.push_u16(*v),
+            Data::DoubleLong(v) => buffer.push_i32(*v),
+            Data::DoubleLongUnsigned(v) => buffer.push_u32(*v),
+            Data::Long64(v) => buffer.push_i64(*v),
+            Data::Long64Unsigned(v) => buffer.push_u64(*v),
+            Data::Enum(v) => buffer.push_u8(*v),
+            Data::Float32(v) => buffer.push_u32(v.to_bits()),
+            Data::Float64(v) => buffer.push_u64(v.to_bits()),
+            Data::OctetString(bytes) => {
+                buffer.push_length(bytes.len());
+                buffer.push_bytes(bytes);
+            }
+            Data::Utf8String(s) => {
+                let bytes = s.as_bytes();
+                buffer.push_length(bytes.len());
+                buffer.push_bytes(bytes);
+            }
+            Data::BitString(bytes) => {
+                buffer.push_length(bytes.len());
+                buffer.push_bytes(bytes);
+            }
+            Data::DateTime(dt) => buffer.push_bytes(&dt.encode()),
+            Data::Date(date) => buffer.push_bytes(&date.encode()),
+            Data::Time(time) => buffer.push_bytes(&time.encode()),
+            Data::Structure(elements) => {
+                for element in elements {
+                    element.encode_value_only(buffer);
+                }
+            }
+            Data::CompactArray(_) => unimplemented!("Nested CompactArray not supported"),
+            Data::Array(elements) => {
+                 for element in elements {
+                     element.encode_value_only(buffer);
+                 }
+            }
+        }
+    }
 }
 
 // ====================
@@ -765,6 +857,7 @@ pub trait ByteBuffer {
     fn push_i32(&mut self, value: i32); // Big-endian
     fn push_i64(&mut self, value: i64); // Big-endian
     fn push_bytes(&mut self, bytes: &[u8]);
+    fn push_length(&mut self, len: usize);
 }
 
 #[cfg(feature = "encode")]
@@ -803,6 +896,29 @@ impl ByteBuffer for Vec<u8> {
 
     fn push_bytes(&mut self, bytes: &[u8]) {
         self.extend_from_slice(bytes);
+    }
+
+    fn push_length(&mut self, len: usize) {
+        if len <= 0x7F {
+            self.push(len as u8);
+        } else {
+            let bytes = len.to_be_bytes();
+            let mut i = 0;
+            while i < bytes.len() && bytes[i] == 0 {
+                i += 1;
+            }
+            if i == bytes.len() {
+                self.push(0);
+                return;
+            }
+            let meaningful_bytes = &bytes[i..];
+            let num_bytes = meaningful_bytes.len();
+            if num_bytes > 127 {
+                panic!("Length too large for DLMS encoding");
+            }
+            self.push(0x80 | num_bytes as u8);
+            self.extend_from_slice(meaningful_bytes);
+        }
     }
 }
 
@@ -976,7 +1092,7 @@ impl Data {
             // OctetString: tag + length + bytes
             Data::OctetString(bytes) => {
                 buffer.push_u8(0x09);
-                buffer.push_u8(bytes.len() as u8);
+                buffer.push_length(bytes.len());
                 buffer.push_bytes(bytes);
             }
 
@@ -984,14 +1100,14 @@ impl Data {
             Data::Utf8String(string) => {
                 buffer.push_u8(0x0C);
                 let bytes = string.as_bytes();
-                buffer.push_u8(bytes.len() as u8);
+                buffer.push_length(bytes.len());
                 buffer.push_bytes(bytes);
             }
 
             // BitString: tag + length + bytes
             Data::BitString(bytes) => {
                 buffer.push_u8(0x04);
-                buffer.push_u8(bytes.len() as u8);
+                buffer.push_length(bytes.len());
                 buffer.push_bytes(bytes);
             }
 
@@ -1016,7 +1132,42 @@ impl Data {
             // Structure: tag + count + encoded elements
             Data::Structure(elements) => {
                 buffer.push_u8(0x02);
-                buffer.push_u8(elements.len() as u8);
+                buffer.push_length(elements.len());
+                for element in elements {
+                    buffer.push_bytes(&element.encode());
+                }
+            }
+
+            // CompactArray: tag + type_desc + array_contents (OctetString)
+            Data::CompactArray(rows) => {
+                buffer.push_u8(0x13);
+
+                if rows.is_empty() {
+                    buffer.pop(); // Remove 0x13
+                    buffer.push_u8(0x01); // Array
+                    buffer.push_u8(0x00); // 0 elements
+                    return buffer;
+                }
+
+                // 1. Contents Description (TypeDescription)
+                let type_desc = rows[0].get_type_description();
+                buffer.push_bytes(&type_desc);
+
+                // 2. Array Contents
+                let mut content_buffer = Vec::new();
+                for row in rows {
+                    row.encode_value_only(&mut content_buffer);
+                }
+
+                buffer.push_u8(0x09);
+                buffer.push_length(content_buffer.len());
+                buffer.push_bytes(&content_buffer);
+            }
+
+            // Array: tag + count + elements
+            Data::Array(elements) => {
+                buffer.push_u8(0x01);
+                buffer.push_length(elements.len());
                 for element in elements {
                     buffer.push_bytes(&element.encode());
                 }
@@ -1031,27 +1182,57 @@ impl Data {
     /// Useful for pre-allocating buffers
     pub fn encoded_len(&self) -> usize {
         match self {
-            Data::Null => 1,                                  // Just the tag
-            Data::Integer(_) => 2,                            // Tag + i8
-            Data::Unsigned(_) => 2,                           // Tag + u8
-            Data::Long(_) => 3,                               // Tag + i16
-            Data::LongUnsigned(_) => 3,                       // Tag + u16
-            Data::DoubleLong(_) => 5,                         // Tag + i32
-            Data::DoubleLongUnsigned(_) => 5,                 // Tag + u32
-            Data::Long64(_) => 9,                             // Tag + i64
-            Data::Long64Unsigned(_) => 9,                     // Tag + u64
-            Data::Enum(_) => 2,                               // Tag + u8
-            Data::Float32(_) => 5,                            // Tag + f32
-            Data::Float64(_) => 9,                            // Tag + f64
-            Data::OctetString(bytes) => 1 + 1 + bytes.len(),  // Tag + length + data
-            Data::Utf8String(string) => 1 + 1 + string.len(), // Tag + length + UTF-8 bytes
-            Data::BitString(bytes) => 1 + 1 + bytes.len(),    // Tag + length + data
-            Data::DateTime(_) => 1 + 12,                      // Tag + 12 bytes for DateTime
-            Data::Date(_) => 1 + 5,                           // Tag + 5 bytes for Date
-            Data::Time(_) => 1 + 4,                           // Tag + 4 bytes for Time
+            Data::Null => 1,
+            Data::Integer(_) => 2,
+            Data::Unsigned(_) => 2,
+            Data::Long(_) => 3,
+            Data::LongUnsigned(_) => 3,
+            Data::DoubleLong(_) => 5,
+            Data::DoubleLongUnsigned(_) => 5,
+            Data::Long64(_) => 9,
+            Data::Long64Unsigned(_) => 9,
+            Data::Enum(_) => 2,
+            Data::Float32(_) => 5,
+            Data::Float64(_) => 9,
+            Data::OctetString(bytes) => 1 + len_of_length(bytes.len()) + bytes.len(),
+            Data::Utf8String(string) => 1 + len_of_length(string.len()) + string.len(),
+            Data::BitString(bytes) => 1 + len_of_length(bytes.len()) + bytes.len(),
+            Data::DateTime(_) => 1 + 12,
+            Data::Date(_) => 1 + 5,
+            Data::Time(_) => 1 + 4,
             Data::Structure(elements) => {
-                1 + 1 + elements.iter().map(|e| e.encoded_len()).sum::<usize>()
+                1 + len_of_length(elements.len()) + elements.iter().map(|e| e.encoded_len()).sum::<usize>()
             }
+            Data::Array(elements) => {
+                1 + len_of_length(elements.len()) + elements.iter().map(|e| e.encoded_len()).sum::<usize>()
+            }
+            Data::CompactArray(rows) => {
+                 if rows.is_empty() { return 2; }
+                 let type_desc_len = rows[0].get_type_description().len();
+                 // This is an estimation for content len as it strips tags
+                 // Calculating exact length without encoding is hard because we need to know size of values without tags
+                 // Using full encoded len is an upper bound (safe for capacity)
+                 let content_len: usize = rows.iter().map(|r| r.encoded_len()).sum();
+                 1 + type_desc_len + 1 + len_of_length(content_len) + content_len
+            }
+        }
+    }
+}
+
+#[cfg(feature = "encode")]
+fn len_of_length(len: usize) -> usize {
+    if len <= 0x7F {
+        1
+    } else {
+        let bytes = len.to_be_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i] == 0 {
+            i += 1;
+        }
+        if i == bytes.len() {
+            1 // Should not happen for > 0x7F
+        } else {
+            1 + (bytes.len() - i)
         }
     }
 }
