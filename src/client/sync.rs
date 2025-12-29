@@ -3,8 +3,8 @@ extern crate alloc;
 
 use crate::association::{
     AareApdu, AarqApdu, ApplicationContextName, AssociationResult, AuthenticationValue,
-    InitiateResponse, MechanismName, ReleaseRequestApdu, ReleaseRequestReason,
-    ReleaseResponseApdu, ReleaseResponseReason,
+    MechanismName, ReleaseRequestApdu, ReleaseRequestReason, ReleaseResponseApdu,
+    ReleaseResponseReason,
 };
 use crate::client::{
     CLOCK_CLASS_ID, CLOCK_TIME_ATTRIBUTE_ID, DEFAULT_MAX_ATTRIBUTES_PER_REQUEST,
@@ -1532,7 +1532,7 @@ mod tests {
 
     #[test]
     fn test_handle_aare_with_negotiated_parameters() {
-        use crate::association::Conformance;
+        use crate::association::{Conformance, InitiateResponse};
 
         let transport = MockTransport::new();
         let settings = ClientSettings::default();
