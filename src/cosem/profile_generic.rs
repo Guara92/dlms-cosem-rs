@@ -62,6 +62,8 @@
 //!     entries_in_use: 0,
 //!     profile_entries: 96, // 24 hours × 4 intervals/hour
 //!     executed_time: 0,
+//!     use_compact_array_encoding: false,
+//!     use_compact_array_encoding: false,
 //! };
 //! ```
 //!
@@ -212,7 +214,7 @@ impl SortMethod {
 ///     sort_object: None,
 ///     entries_in_use: 0,
 ///     profile_entries: 96,
-///     executed_time: 0,
+///     use_compact_array_encoding: false,
 /// };
 /// ```
 ///
@@ -289,6 +291,16 @@ pub struct ProfileGeneric {
     /// - Reset to 0 on initialization or reset()
     #[cfg_attr(feature = "serde", serde(skip))]
     pub executed_time: u32,
+
+    /// Configuration: Use Compact Array encoding for buffer (Attribute 2)
+    ///
+    /// If true, non-empty buffer will be encoded as CompactArray (tag 19).
+    /// If false (default), buffer is encoded as standard Array (tag 1).
+    ///
+    /// **Note**: Compact Array encoding is an optimization introduced in DLMS Green Book 14.4.
+    /// Ensure the client supports this encoding before enabling.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub use_compact_array_encoding: bool,
 }
 
 impl CosemObject for ProfileGeneric {
@@ -311,10 +323,12 @@ impl CosemObject for ProfileGeneric {
                 // Encode buffer as Array of Arrays (convert VecDeque to Vec for encoding)
                 let rows: Vec<Data> =
                     self.buffer.iter().map(|row| Data::Structure(row.clone())).collect();
-                if rows.is_empty() {
-                    Ok(Data::Structure(rows))
-                } else {
+
+                if self.use_compact_array_encoding && !rows.is_empty() {
                     Ok(Data::CompactArray(rows))
+                } else {
+                    // Standard encoding: Array of Structures
+                    Ok(Data::Array(rows))
                 }
             }
             3 => {
@@ -516,6 +530,7 @@ impl ProfileGeneric {
             entries_in_use: 0,
             profile_entries,
             executed_time: 0,
+            use_compact_array_encoding: false,
         }
     }
 
@@ -571,6 +586,7 @@ impl ProfileGeneric {
             entries_in_use: 0,
             profile_entries,
             executed_time: 0,
+            use_compact_array_encoding: false,
         }
     }
 
@@ -624,6 +640,7 @@ impl ProfileGeneric {
             entries_in_use: 0,
             profile_entries,
             executed_time: 0,
+            use_compact_array_encoding: false,
         }
     }
 
@@ -659,6 +676,7 @@ impl ProfileGeneric {
     /// #     entries_in_use: 1,
     /// #     profile_entries: 10,
     /// #     executed_time: 0,
+/// #     use_compact_array_encoding: false,
     /// # };
     ///
     /// let result = profile.invoke_method(1, Some(Data::Integer(0)));
@@ -717,6 +735,7 @@ impl ProfileGeneric {
     ///     entries_in_use: 0,
     ///     profile_entries: 10,
     ///     executed_time: 0,
+/// #     use_compact_array_encoding: false,
     /// };
     ///
     /// let result = profile.invoke_method(2, Some(Data::Integer(0)));
@@ -1112,10 +1131,10 @@ mod tests {
         profile.entries_in_use = 2;
         let result = profile.get_attribute(2);
         assert!(result.is_ok());
-        if let Data::CompactArray(rows) = result.unwrap() {
+        if let Data::Array(rows) = result.unwrap() {
             assert_eq!(rows.len(), 2);
         } else {
-            panic!("Expected CompactArray");
+            panic!("Expected Array");
         }
     }
 
@@ -2025,10 +2044,10 @@ mod tests {
         // Get buffer attribute (should not panic)
         let result = profile.get_attribute(2);
         assert!(result.is_ok());
-        if let Data::CompactArray(rows) = result.unwrap() {
+        if let Data::Array(rows) = result.unwrap() {
             assert_eq!(rows.len(), 500);
         } else {
-            panic!("Expected CompactArray");
+            panic!("Expected Array");
         }
     }
 
@@ -2238,6 +2257,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Add entries - buffer size = 3, keep 3 largest
@@ -2283,6 +2303,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Test with negative values: -10, -5, -20, -3
@@ -2324,6 +2345,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Mix different numeric types
@@ -2356,6 +2378,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 1,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::Integer(10)]);
@@ -2385,6 +2408,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 5,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Add 10 entries to buffer of size 5
@@ -2428,6 +2452,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
@@ -2468,6 +2493,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Test with negative values
@@ -2509,6 +2535,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::Integer(50)]);
@@ -2539,6 +2566,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 1,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::Integer(20)]);
@@ -2568,6 +2596,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 5,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Add 10 entries to buffer of size 5
@@ -2611,6 +2640,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Values: -10, -5, 3, 8, 1
@@ -2653,6 +2683,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
@@ -2692,6 +2723,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLong(-100)]);
@@ -2731,6 +2763,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 4,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLong(50)]);
@@ -2775,6 +2808,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Values: -10, -5, 3, 8, 1
@@ -2817,6 +2851,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLongUnsigned(100)]);
@@ -2856,6 +2891,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLong(-100)]);
@@ -2895,6 +2931,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 4,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         profile.add_entry(vec![Data::DoubleLong(50)]);
@@ -2939,6 +2976,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Should fallback to FIFO
@@ -2980,6 +3018,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Should fallback to FIFO
@@ -3010,6 +3049,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Add non-numeric values - should fallback to FIFO
@@ -3040,6 +3080,7 @@ mod tests {
             entries_in_use: 0,
             profile_entries: 3,
             executed_time: 0,
+            use_compact_array_encoding: false,
         };
 
         // Empty buffer - should handle gracefully
@@ -3048,7 +3089,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_array_encoding_placeholder() {
+    fn test_compact_array_encoding_opt_in() {
         // Phase 5.3: Compact array encoding for large buffers (Green Book 14.4)
         let mut profile = ProfileGeneric::with_fifo(
             ObisCode::new(1, 0, 99, 1, 0, 255),
@@ -3061,14 +3102,23 @@ mod tests {
             0,
             100,
         );
+
+        // Enable Compact Array encoding
+        profile.use_compact_array_encoding = true;
+
         // Add many entries
         for _ in 0..50 {
             profile.add_entry(vec![Data::DoubleLongUnsigned(0)]);
         }
-        // TODO Phase 5.3: Optimize encoding for large buffers
-        // Compact encoding can reduce message size significantly
+
         let result = profile.get_attribute(2);
         assert!(result.is_ok());
-        // Currently uses standard Structure encoding
+
+        // Should be CompactArray now
+        if let Data::CompactArray(rows) = result.unwrap() {
+            assert_eq!(rows.len(), 50);
+        } else {
+            panic!("Expected CompactArray when enabled");
+        }
     }
 }

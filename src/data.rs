@@ -777,7 +777,16 @@ impl Data {
             Data::Long(_) => buffer.push(0x10),
             Data::Unsigned(_) => buffer.push(0x11),
             Data::LongUnsigned(_) => buffer.push(0x12),
-            Data::CompactArray(_) => unimplemented!("Nested CompactArray not supported"),
+            Data::CompactArray(rows) => {
+                buffer.push(0x13);
+                if let Some(first) = rows.first() {
+                    buffer.extend(first.get_type_description());
+                } else {
+                    // Empty compact array content description?
+                    // Fallback to Null (0x00) as placeholder if empty
+                    buffer.push(0x00);
+                }
+            }
             Data::Long64(_) => buffer.push(0x14),
             Data::Long64Unsigned(_) => buffer.push(0x15),
             Data::Enum(_) => buffer.push(0x16),
@@ -828,7 +837,11 @@ impl Data {
                     element.encode_value_only(buffer);
                 }
             }
-            Data::CompactArray(_) => unimplemented!("Nested CompactArray not supported"),
+            Data::CompactArray(rows) => {
+                for row in rows {
+                    row.encode_value_only(buffer);
+                }
+            }
             Data::Array(elements) => {
                  for element in elements {
                      element.encode_value_only(buffer);
@@ -913,9 +926,8 @@ impl ByteBuffer for Vec<u8> {
             }
             let meaningful_bytes = &bytes[i..];
             let num_bytes = meaningful_bytes.len();
-            if num_bytes > 127 {
-                panic!("Length too large for DLMS encoding");
-            }
+            // num_bytes will be max 8 for 64-bit systems, which fits in 7 bits (127).
+            // So we don't need to check for overflow here.
             self.push(0x80 | num_bytes as u8);
             self.extend_from_slice(meaningful_bytes);
         }
@@ -1147,6 +1159,24 @@ impl Data {
                     buffer.push_u8(0x01); // Array
                     buffer.push_u8(0x00); // 0 elements
                     return buffer;
+                }
+
+                // Verify homogeneity in debug builds
+                #[cfg(debug_assertions)]
+                {
+                    if let Data::Structure(first_elems) = &rows[0] {
+                        let first_len = first_elems.len();
+                        for (i, row) in rows.iter().enumerate().skip(1) {
+                            if let Data::Structure(elems) = row {
+                                debug_assert_eq!(elems.len(), first_len, "Row {} has different length than first row", i);
+                                for (j, (e1, e2)) in first_elems.iter().zip(elems.iter()).enumerate() {
+                                    debug_assert_eq!(std::mem::discriminant(e1), std::mem::discriminant(e2), "Row {} element {} type mismatch", i, j);
+                                }
+                            } else {
+                                debug_assert!(false, "Row {} is not a Structure", i);
+                            }
+                        }
+                    }
                 }
 
                 // 1. Contents Description (TypeDescription)
