@@ -213,7 +213,13 @@ impl DlmsSession {
 
         if aare.result == AssociationResult::Accepted {
             self.state.associated = true;
-            // TODO: Parse user_information for xDLMS InitiateResponse to get negotiated PDU size/conformance
+
+            if let Some(user_info) = &aare.user_information {
+                self.state.negotiated_max_pdu_size = user_info.server_max_receive_pdu_size;
+                self.state.negotiated_conformance =
+                    Some(user_info.negotiated_conformance.to_bytes().to_vec());
+            }
+
             Ok(())
         } else {
             self.state.associated = false;
@@ -1522,6 +1528,31 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(client.session().state().associated);
+    }
+
+    #[test]
+    fn test_handle_aare_with_negotiated_parameters() {
+        use crate::association::{Conformance, InitiateResponse};
+
+        let transport = MockTransport::new();
+        let settings = ClientSettings::default();
+        let mut client = ClientBuilder::new(transport, settings).build_with_heap(2048);
+
+        let negotiated_conformance = Conformance::GET | Conformance::SET;
+        let initiate_resp = InitiateResponse::new_ln(negotiated_conformance, 1024);
+        let aare =
+            AareApdu::new_accepted(ApplicationContextName::LogicalNameReferencing, initiate_resp);
+
+        // Directly call handle_aare on the session
+        let result = client.session.handle_aare(&aare);
+
+        assert!(result.is_ok());
+        assert!(client.session().state().associated);
+        assert_eq!(client.session().state().negotiated_max_pdu_size, 1024);
+        assert_eq!(
+            client.session().state().negotiated_conformance,
+            Some(negotiated_conformance.to_bytes().to_vec())
+        );
     }
 
     #[cfg(feature = "heapless-buffer")]
