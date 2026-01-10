@@ -1,33 +1,31 @@
 --- src/association/rlre.rs
 +++ src/association/rlre.rs
 @@ -10,10 +10,13 @@ use core::fmt;
- 
+
  use super::ReleaseResponseReason;
- 
+
 -#[cfg(any(feature = "encode", feature = "parse"))]
 +#[cfg(feature = "encode")]
 +use alloc::vec;
 +
 +#[cfg(feature = "encode")]
  use super::ber::TagType;
- 
+
  #[cfg(feature = "encode")]
  use super::ber::{encode_application, encode_context_specific, encode_octet_string};
- 
+
 --- a/src/association/rlrq.rs
 +++ b/src/association/rlrq.rs
 @@ -10,10 +10,13 @@ use core::fmt;
- 
+
  use super::ReleaseRequestReason;
- 
+
 -#[cfg(any(feature = "encode", feature = "parse"))]
 +#[cfg(feature = "encode")]
 +use alloc::vec;
 +
 +#[cfg(feature = "encode")]
  use super::ber::TagType;
- 
+
  #[cfg(feature = "encode")]
  use super::ber::{encode_application, encode_context_specific, encode_octet_string};
- 
- 
